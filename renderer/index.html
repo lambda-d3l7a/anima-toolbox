@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Anima XY Plot</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="toolbar">
+    <div class="tb-group">
+      <label class="tb-label">ComfyUI</label>
+      <input id="server" type="text" placeholder="http://127.0.0.1:8188" />
+      <button id="connectBtn">连接</button>
+      <span id="connStatus" class="conn-status">未连接</span>
+    </div>
+    <div id="toolbarXy" class="tb-group">
+      <button id="inspectLorasBtn" class="ghost" title="查看 ComfyUI 已识别的全部 LoRA">🔎 LoRA 列表</button>
+      <button id="generateBtn" class="primary" disabled>生成 XY 图</button>
+      <button id="cancelBtn" class="ghost hidden">取消</button>
+      <button id="saveGridBtn" class="ghost" disabled>保存网格</button>
+    </div>
+    <div id="toolbarTag" class="tb-group hidden">
+      <span id="dsHeaderInfo" class="muted"></span>
+    </div>
+  </header>
+
+  <div class="layout">
+    <!-- LEFT: icon-bar view switcher -->
+    <nav class="side-nav">
+      <button id="navXy" class="nav-btn active" data-view="xy" title="XY 图">
+        <span class="nav-icon">🎨</span>
+        <span class="nav-label">XY 图</span>
+      </button>
+      <button id="navTag" class="nav-btn" data-view="tag" title="标签管理">
+        <span class="nav-icon">🏷</span>
+        <span class="nav-label">标签</span>
+      </button>
+    </nav>
+
+    <!-- VIEW: XY plot -->
+    <main id="viewXy" class="view view-active">
+    <aside class="panel">
+      <section class="block">
+        <h3>模型 <span class="muted">(Anima = Cosmos 三件套)</span></h3>
+        <label>扩散模型 <span class="muted">(models/diffusion_models)</span></label>
+        <select id="unet"></select>
+        <div class="grid2">
+          <div>
+            <label>Weight Dtype</label>
+            <select id="weightDtype"></select>
+          </div>
+          <div>
+            <label>CLIP Type</label>
+            <select id="clipType"></select>
+          </div>
+        </div>
+        <label>文本编码器 <span class="muted">(models/text_encoders)</span></label>
+        <select id="textEncoder"></select>
+        <label>VAE <span class="muted">(models/vae)</span></label>
+        <select id="vae"></select>
+      </section>
+
+      <section class="block">
+        <h3>提示词</h3>
+        <label>正向 Prompt</label>
+        <textarea id="positive" rows="4" placeholder="masterpiece, best quality, 1girl, ..."></textarea>
+        <label>负向 Prompt</label>
+        <textarea id="negative" rows="3" placeholder="lowres, bad anatomy, ..."></textarea>
+      </section>
+
+      <section class="block">
+        <h3>采样设置</h3>
+        <div class="grid2">
+          <div>
+            <label>Width</label>
+            <input id="width" type="number" value="832" min="64" step="8" />
+          </div>
+          <div>
+            <label>Height</label>
+            <input id="height" type="number" value="1216" min="64" step="8" />
+          </div>
+          <div>
+            <label>Steps</label>
+            <input id="steps" type="number" value="35" min="1" />
+          </div>
+          <div>
+            <label>CFG</label>
+            <input id="cfg" type="number" value="4.5" step="0.1" />
+          </div>
+          <div>
+            <label>Sampler</label>
+            <select id="sampler"></select>
+          </div>
+          <div>
+            <label>Scheduler</label>
+            <select id="scheduler"></select>
+          </div>
+          <div class="span2">
+            <label>Seed <span class="muted">(留空 / -1 = 随机)</span></label>
+            <input id="seed" type="text" value="-1" />
+          </div>
+        </div>
+      </section>
+
+      <section class="block">
+        <h3>基础 LoRA <span class="muted">(每张图都加)</span></h3>
+        <div id="baseLoras" class="lora-list"></div>
+        <div class="lora-add-row">
+          <button id="addBaseLora" class="small ghost">🔎 从列表添加</button>
+          <button id="addBaseLoraFile" class="small ghost">📁 从文件添加</button>
+        </div>
+      </section>
+
+      <section class="block axis-block">
+        <h3>X 轴</h3>
+        <div class="axis-row">
+          <select id="xType" class="axis-type">
+            <option value="none">— 无 —</option>
+            <option value="lora_weight">LoRA 权重</option>
+            <option value="lora_file">LoRA 文件</option>
+            <option value="seed">Seed</option>
+            <option value="cfg">CFG</option>
+            <option value="steps">Steps</option>
+            <option value="sampler">Sampler</option>
+            <option value="scheduler">Scheduler</option>
+            <option value="sampler_scheduler">Sampler + Scheduler</option>
+          </select>
+        </div>
+        <div id="xExtra" class="axis-extra"></div>
+        <label>值列表 <span class="muted">(逗号或换行分隔)</span></label>
+        <textarea id="xValues" rows="2" placeholder="0.4, 0.6, 0.8, 1.0"></textarea>
+      </section>
+
+      <section class="block axis-block">
+        <h3>Y 轴</h3>
+        <div class="axis-row">
+          <select id="yType" class="axis-type">
+            <option value="none">— 无 —</option>
+            <option value="lora_weight">LoRA 权重</option>
+            <option value="lora_file">LoRA 文件</option>
+            <option value="seed">Seed</option>
+            <option value="cfg">CFG</option>
+            <option value="steps">Steps</option>
+            <option value="sampler">Sampler</option>
+            <option value="scheduler">Scheduler</option>
+            <option value="sampler_scheduler">Sampler + Scheduler</option>
+          </select>
+        </div>
+        <div id="yExtra" class="axis-extra"></div>
+        <label>值列表 <span class="muted">(逗号或换行分隔)</span></label>
+        <textarea id="yValues" rows="2"></textarea>
+      </section>
+
+      <section class="block">
+        <div id="progressWrap" class="progress-wrap hidden">
+          <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
+          <div id="progressText" class="progress-text"></div>
+        </div>
+      </section>
+    </aside>
+
+    <!-- XY grid preview -->
+    <section class="canvas-wrap">
+      <div id="bigProgress" class="big-progress hidden">
+        <div class="bp-line bp-overall">
+          <div class="bp-track"><div id="bpBarOverall" class="bp-bar"></div></div>
+          <div class="bp-text">
+            <span id="bpCellsText">0 / 0</span>
+            <span class="bp-sep">·</span>
+            <span id="bpElapsed">用时 00:00</span>
+            <span class="bp-sep">·</span>
+            <span id="bpEta">ETA --:--</span>
+          </div>
+        </div>
+        <div class="bp-line bp-cell">
+          <div class="bp-track bp-track-thin"><div id="bpBarCell" class="bp-bar bp-bar-cell"></div></div>
+          <div class="bp-text bp-text-sub">
+            <span id="bpCellText">等待开始…</span>
+          </div>
+        </div>
+      </div>
+      <div class="canvas-body">
+        <div class="canvas-main">
+          <div id="emptyHint" class="empty-hint">
+            <h2>Anima XY Plot</h2>
+            <p>1. 启动本地 ComfyUI（默认 <code>http://127.0.0.1:8188</code>）</p>
+            <p>2. 把 <a href="#" id="animaLink">Anima</a> 三个文件分别放好：</p>
+            <p style="margin-left:1em;">
+              • <code>anima-base-v1.0.safetensors</code> → <code>models/diffusion_models/</code><br/>
+              • <code>qwen_3_06b_base.safetensors</code> → <code>models/text_encoders/</code><br/>
+              • <code>qwen_image_vae.safetensors</code> → <code>models/vae/</code>
+            </p>
+            <p>3. 点上方「连接」加载模型 / LoRA 列表</p>
+            <p>4. 配置 X / Y 轴，点「生成 XY 图」</p>
+          </div>
+          <div id="gridScroll" class="grid-scroll hidden">
+            <div id="gridTable" class="grid-table"></div>
+          </div>
+          <!-- Completed grids history (below the active grid) -->
+          <div id="gridHistory" class="grid-history hidden">
+            <div class="gh-head">
+              <span>已完成的 XY 图 <span id="ghCount" class="muted">(0)</span></span>
+              <button id="ghClear" class="small ghost">清空历史</button>
+            </div>
+            <div id="ghList" class="gh-list"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+    </main>
+
+    <!-- VIEW: Tag Management -->
+    <main id="viewTag" class="view hidden">
+      <div class="tagger-model-row">
+        <span class="tg-label">模型</span>
+        <span id="tgStatus" class="tg-status">未加载</span>
+        <input id="tgModelDir" type="text" placeholder="模型目录" readonly />
+        <button id="tgPickDir" class="small">📁 选目录</button>
+        <button id="tgLoad" class="small primary">加载</button>
+        <button id="tgDownload" class="small ghost">↗ 下载模型</button>
+      </div>
+
+      <div class="tm-modeswitch">
+        <button id="tmModeSingle" class="tm-mode active" data-mode="single">🖼 单图打标</button>
+        <button id="tmModeDataset" class="tm-mode" data-mode="dataset">📁 数据集编辑</button>
+        <button id="tmModeBatch" class="tm-mode" data-mode="batch">📦 批量打标</button>
+      </div>
+
+      <!-- Mode: single image -->
+      <div id="tmSingle" class="tm-body tm-mode-body">
+        <div class="tm-left">
+          <div id="tgDrop" class="tg-drop">
+            <div class="tg-drop-hint">
+              <div style="font-size:36px;line-height:1;">🖼️</div>
+              <div>把图片拖到这里</div>
+              <div class="muted">或</div>
+              <button id="tgPickImg" class="small">📁 选择图片</button>
+            </div>
+            <img id="tgPreview" class="tg-preview hidden" />
+          </div>
+          <div id="tgImagePath" class="tg-image-path muted"></div>
+        </div>
+        <div class="tm-right">
+          <div class="tg-controls">
+            <label>阈值 <span id="tgThreshVal">0.50</span></label>
+            <input id="tgThresh" type="range" min="0.05" max="0.95" step="0.01" value="0.50" />
+            <button id="tgRun" class="small primary" disabled>识别</button>
+            <span id="tgRunInfo" class="muted"></span>
+          </div>
+          <div id="tgResults" class="tg-results">
+            <div class="tg-empty muted">加载模型并选择图片后，结果会显示在这里。</div>
+          </div>
+          <div class="tg-copy-row">
+            <button id="tgCopyAnima" class="primary" disabled>📋 复制为 Anima 格式</button>
+            <button id="tgCopyRaw" class="ghost" disabled>📋 复制原始</button>
+            <button id="tgSelectAll" class="ghost" disabled>全选</button>
+            <button id="tgSelectNone" class="ghost" disabled>全不选</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Mode: dataset editor -->
+      <div id="tmDataset" class="tm-body tm-mode-body hidden">
+        <aside class="ds-list">
+          <div class="ds-list-head">
+            <button id="dsPickDir" class="small primary">📁 选择目录</button>
+            <button id="dsReload" class="small ghost" title="重新扫描" disabled>🔄</button>
+          </div>
+          <div id="dsDir" class="ds-dir muted">未选择目录</div>
+          <div class="ds-filter-row">
+            <input id="dsFilter" type="text" placeholder="过滤文件名…" />
+            <select id="dsFilterTag">
+              <option value="all">全部</option>
+              <option value="tagged">已打标</option>
+              <option value="untagged">未打标</option>
+            </select>
+          </div>
+          <div class="ds-count-row">
+            <span id="dsCount" class="muted">0 张</span>
+            <button id="dsSelectAll" class="small ghost" disabled>全选</button>
+            <button id="dsSelectNone" class="small ghost" disabled>清空</button>
+          </div>
+          <div id="dsImages" class="ds-images"></div>
+          <div class="ds-batch">
+            <div class="ds-batch-title">批量操作 <span id="dsBatchCount" class="muted">(0 选中)</span></div>
+            <div class="ds-batch-row">
+              <button id="dsBatchAdd" class="small" disabled title="为选中图片添加 tag">+ 添加 tag</button>
+              <button id="dsBatchRemove" class="small" disabled title="从选中图片删除 tag">− 删除 tag</button>
+            </div>
+            <div class="ds-batch-row">
+              <button id="dsBatchRename" class="small" disabled title="将一个 tag 重命名为另一个">🔄 重命名</button>
+              <button id="dsBatchClear" class="small" disabled title="清空选中图片的所有 tag">✕ 清空</button>
+            </div>
+            <div class="ds-batch-row">
+              <button id="dsBatchAutoTag" class="small primary" disabled title="对选中图片跑识别并写入">🏷 批量自动识别…</button>
+            </div>
+          </div>
+        </aside>
+
+        <section class="ds-center">
+          <div class="ds-preview-wrap">
+            <img id="dsPreview" class="ds-preview hidden" />
+            <div id="dsPreviewEmpty" class="muted ds-preview-empty">从左侧列表选一张图片</div>
+          </div>
+          <div id="dsImagePath" class="ds-image-path muted"></div>
+        </section>
+
+        <aside class="ds-edit">
+          <div class="ds-edit-head">
+            <span class="ds-edit-title">Tag 编辑</span>
+            <span id="dsDirty" class="ds-dirty hidden">● 未保存</span>
+          </div>
+          <textarea id="dsTagsText" rows="6" placeholder="未选择图片"></textarea>
+          <div class="ds-tag-chips" id="dsTagChips"></div>
+          <div class="ds-edit-actions">
+            <button id="dsSaveTags" class="small primary" disabled>💾 保存</button>
+            <button id="dsReloadTags" class="small ghost" disabled>↺ 重新加载</button>
+            <button id="dsClearTags" class="small ghost" disabled>✕ 清空</button>
+          </div>
+
+          <div class="ds-section-head">自动识别填入</div>
+          <div class="ds-autotag-row">
+            <label>阈值 <span id="dsThreshVal">0.50</span></label>
+            <input id="dsThresh" type="range" min="0.05" max="0.95" step="0.01" value="0.50" />
+          </div>
+          <div class="ds-autotag-row">
+            <label class="ds-check">
+              <input id="dsUseAnima" type="checkbox" checked />
+              Anima 格式 (artist→@, _→空格, 小写)
+            </label>
+          </div>
+          <div class="ds-autotag-row">
+            <button id="dsRunAutoTag" class="small" disabled>🏷 识别</button>
+            <select id="dsAutoTagMode">
+              <option value="merge">合并到现有 tag</option>
+              <option value="replace">替换现有 tag</option>
+            </select>
+            <button id="dsApplyAutoTag" class="small primary" disabled>应用到编辑器</button>
+          </div>
+          <div id="dsAutoTagInfo" class="muted"></div>
+        </aside>
+      </div>
+
+      <!-- Mode: batch tag (folder → tag all → write .txt) -->
+      <div id="tmBatch" class="tm-body tm-mode-body hidden">
+        <div class="tm-batch">
+          <div class="bt-card">
+            <h3 class="bt-title">📦 批量为目录里所有图片打标</h3>
+
+            <label>目标目录</label>
+            <div class="bt-row">
+              <input id="btDir" type="text" readonly placeholder="点右侧 📁 选择目录" />
+              <button id="btPickDir" class="small">📁 选择</button>
+              <button id="btScan" class="small ghost" disabled>🔍 扫描</button>
+            </div>
+
+            <div class="bt-row bt-opts">
+              <label class="bt-check"><input id="btRecursive" type="checkbox" /> 包含子目录</label>
+              <label class="bt-check"><input id="btSkipTagged" type="checkbox" checked /> 跳过已有 .txt 的图片</label>
+            </div>
+
+            <div class="bt-row bt-opts">
+              <div class="bt-opt-group">
+                <label>阈值 <span id="btThreshVal">0.50</span></label>
+                <input id="btThresh" type="range" min="0.05" max="0.95" step="0.01" value="0.50" />
+              </div>
+              <div class="bt-opt-group">
+                <label>格式</label>
+                <select id="btFormat">
+                  <option value="anima">Anima (@artist, lowercase, spaces)</option>
+                  <option value="raw">原始 tag (下划线保留)</option>
+                </select>
+              </div>
+              <div class="bt-opt-group">
+                <label>写入模式</label>
+                <select id="btMode">
+                  <option value="replace">替换 .txt</option>
+                  <option value="merge">合并到现有 tag</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="bt-summary">
+              <span id="btCount" class="muted">未扫描</span>
+              <span id="btState" class="muted">就绪</span>
+            </div>
+
+            <div class="bt-progress">
+              <div class="bt-track"><div id="btBar" class="bt-bar"></div></div>
+              <div class="bt-progress-text">
+                <span id="btProgText">0 / 0</span>
+                <span class="bp-sep">·</span>
+                <span id="btElapsed">用时 00:00</span>
+                <span class="bp-sep">·</span>
+                <span id="btEta">ETA --:--</span>
+              </div>
+            </div>
+
+            <div class="bt-row bt-actions">
+              <button id="btStart" class="primary" disabled>🚀 开始打标</button>
+              <button id="btCancel" class="ghost hidden">✕ 取消</button>
+            </div>
+
+            <div class="bt-log-head">日志 <button id="btClearLog" class="small ghost">清空</button></div>
+            <div id="btLog" class="bt-log"></div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- LoRA list picker modal -->
+  <div id="loraModal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3>从 ComfyUI 已知列表里选 LoRA</h3>
+        <button id="loraModalClose" class="ghost">✕</button>
+      </div>
+      <div class="modal-sub muted" id="loraModalSub"></div>
+      <input id="loraFilter" type="text" placeholder="过滤（按名字 / 路径片段）…" />
+      <div id="loraListWrap" class="lora-list-wrap"></div>
+      <div class="modal-actions">
+        <button id="loraRefresh" class="ghost">🔄 刷新列表</button>
+        <button id="loraCancel" class="ghost">取消</button>
+        <button id="loraOk" class="primary" disabled>选择</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cell viewer overlay -->
+  <div id="viewer" class="viewer hidden">
+    <button class="viewer-close" id="viewerClose">✕</button>
+    <button class="viewer-save" id="viewerSave">保存</button>
+    <div class="viewer-meta" id="viewerMeta"></div>
+    <img id="viewerImg" />
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
