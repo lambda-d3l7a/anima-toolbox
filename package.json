@@ -1,7 +1,14 @@
 {
-  "name": "anima-xy-plot",
+  "name": "anima-toolbox",
   "version": "0.1.0",
-  "description": "Generate XY plot grids for the Anima model and its LoRAs via ComfyUI",
+  "description": "Desktop toolbox for the Anima model: XY plot grids via ComfyUI + Camie-Tagger v2 batch tagging",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Lambda-D3L7A/anima-toolbox.git"
+  },
+  "homepage": "https://github.com/Lambda-D3L7A/anima-toolbox",
+  "bugs": "https://github.com/Lambda-D3L7A/anima-toolbox/issues",
+  "keywords": ["anima", "comfyui", "lora", "xy-plot", "electron", "tagger", "danbooru", "onnx"],
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -20,8 +27,8 @@
     "ws": "^8.18.0"
   },
   "build": {
-    "appId": "com.lambda.anima-xy-plot",
-    "productName": "Anima XY Plot",
+    "appId": "com.lambda.anima-toolbox",
+    "productName": "Anima Toolbox",
     "artifactName": "${name}-${version}-setup.${ext}",
     "files": [
       "main.js",
