@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('api', {
   comfyObjectInfo: (url) => ipcRenderer.invoke('comfy:objectInfo', url),
   comfyRunGrid: (opts) => ipcRenderer.invoke('comfy:runGrid', opts),
   comfyCancel: (jobId) => ipcRenderer.invoke('comfy:cancel', jobId),
+  comfyKontextSingle: (opts) => ipcRenderer.invoke('comfy:kontextSingle', opts),
+  comfyKontextBatch: (opts) => ipcRenderer.invoke('comfy:kontextBatch', opts),
   onComfyProgress: (cb) => ipcRenderer.on('comfy:progress', (_e, p) => cb(p)),
 
   // Image utilities
@@ -13,6 +15,8 @@ contextBridge.exposeInMainWorld('api', {
   saveCell: (opts) => ipcRenderer.invoke('cell:save', opts),
   pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
   pickLoraFiles: (opts) => ipcRenderer.invoke('dialog:pickLoraFiles', opts),
+  pickImage: () => ipcRenderer.invoke('dialog:pickImage'),
+  pickEditDir: () => ipcRenderer.invoke('dialog:pickEditDir'),
 
   // Resolve File → absolute path (drag-drop helper).
   // Electron 32+ removed File.path; use webUtils.getPathForFile() instead.

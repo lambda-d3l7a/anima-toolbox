@@ -4,7 +4,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const WebSocket = require('ws');
 
-const { buildWorkflow, applyAxisOverride } = require('./workflow');
+const { buildWorkflow, applyAxisOverride, buildKontextWorkflow } = require('./workflow');
 const tagger = require('./tagger');
 
 // ---------- local persistence ----------
@@ -92,6 +92,9 @@ async function comfyObjectInfo(url) {
     unets: extractCombo('UNETLoader', 'unet_name'),
     textEncoders: extractCombo('CLIPLoader', 'clip_name'),
     clipTypes: extractCombo('CLIPLoader', 'type'),
+    // DualCLIPLoader is used by Flux Kontext (clip_l + t5xxl with type=flux)
+    dualClipNames: extractCombo('DualCLIPLoader', 'clip_name1'),
+    dualClipTypes: extractCombo('DualCLIPLoader', 'type'),
     weightDtypes: weightDtypes.length ? weightDtypes : ['default', 'fp8_e4m3fn', 'fp8_e5m2'],
     vaes: extractCombo('VAELoader', 'vae_name'),
     loras: extractCombo('LoraLoader', 'lora_name'),
@@ -396,6 +399,211 @@ function cancelJob(jobId) {
   return true;
 }
 
+// ---------- Flux Kontext editor ----------
+// Upload a local file to ComfyUI's input/ folder via POST /upload/image.
+// Returns the filename ComfyUI sees (may be different from local filename).
+async function comfyUploadImage(base, filePath) {
+  const fileBuf = fs.readFileSync(filePath);
+  const filename = path.basename(filePath);
+  const fd = new FormData();
+  // Node 18+ FormData / Blob is global
+  const blob = new Blob([fileBuf]);
+  fd.append('image', blob, filename);
+  fd.append('overwrite', '1');
+  const r = await fetch(base + '/upload/image', { method: 'POST', body: fd });
+  if (!r.ok) {
+    const t = await r.text().catch(() => '');
+    throw new Error('upload/image HTTP ' + r.status + ': ' + t.slice(0, 300));
+  }
+  const j = await r.json();
+  // ComfyUI returns { name, subfolder, type }
+  return j.name || filename;
+}
+
+async function pickEditImage() {
+  const r = await dialog.showOpenDialog({
+    title: '选择要编辑的图片',
+    properties: ['openFile'],
+    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] }],
+  });
+  if (r.canceled || !r.filePaths.length) return null;
+  return r.filePaths[0];
+}
+
+async function pickEditDir() {
+  const r = await dialog.showOpenDialog({
+    title: '选择要批量编辑的图片目录',
+    properties: ['openDirectory'],
+  });
+  if (r.canceled || !r.filePaths.length) return null;
+  return r.filePaths[0];
+}
+
+function listImageFilesInDir(dir, recursive) {
+  const exts = ['.png', '.jpg', '.jpeg', '.webp', '.bmp'];
+  const out = [];
+  const walk = (d) => {
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) { if (recursive) walk(full); continue; }
+      const ext = path.extname(e.name).toLowerCase();
+      if (exts.includes(ext)) out.push(full);
+    }
+  };
+  walk(dir);
+  out.sort();
+  return out;
+}
+
+// Run a single Kontext edit. Returns { ok, dataUrl, savedPath?, error? }.
+// Uploads the input image, submits the workflow, waits, fetches result.
+async function runKontextSingle(opts, sender) {
+  const jobId = crypto.randomUUID();
+  const clientId = 'anima-kontext-' + crypto.randomBytes(6).toString('hex');
+  const base = normalizeBase(opts.server);
+  const token = { cancelled: false, sock: null, base };
+  activeJobs.set(jobId, token);
+
+  const emit = (p) => { try { sender && sender.send('comfy:progress', { jobId, ...p }); } catch {} };
+
+  emit({ status: 'kontext-start', jobId, total: 1 });
+
+  let result;
+  try {
+    // 1. upload image
+    emit({ status: 'kontext-step', phase: 'uploading', completed: 0, total: 1 });
+    const uploaded = await comfyUploadImage(base, opts.inputPath);
+
+    // 2. build workflow
+    const cfg = { ...opts.cfg, inputImage: uploaded };
+    const workflow = buildKontextWorkflow(cfg);
+
+    // 3. open ws + submit
+    const sock = new ComfySocket(base, clientId);
+    token.sock = sock;
+    await sock.ensureOpen();
+    if (token.cancelled) throw new Error('cancelled');
+
+    emit({ status: 'kontext-step', phase: 'queued', completed: 0, total: 1 });
+    const promptResp = await submitPrompt(base, workflow, clientId);
+
+    // 4. wait for completion (with per-step progress)
+    const images = await waitForPrompt(sock, base, promptResp.prompt_id, (p) => {
+      emit({ status: 'cell-step', step: p.step, total: p.total });
+    }, token);
+
+    // 5. fetch the output image
+    const first = images[0];
+    const buf = await fetchImage(base, first.filename, first.subfolder, first.type);
+    const dataUrl = 'data:image/png;base64,' + buf.toString('base64');
+
+    // 6. optionally save to disk (batch mode)
+    let savedPath = null;
+    if (opts.outputPath) {
+      try {
+        fs.mkdirSync(path.dirname(opts.outputPath), { recursive: true });
+        fs.writeFileSync(opts.outputPath, buf);
+        savedPath = opts.outputPath;
+      } catch (e) {
+        console.error('[kontext] save failed:', e);
+      }
+    }
+
+    sock.close();
+    result = { ok: true, dataUrl, savedPath, filename: first.filename };
+    emit({ status: 'kontext-done', dataUrl, savedPath, filename: first.filename });
+  } catch (e) {
+    const msg = String(e.message || e);
+    result = { ok: false, error: msg, cancelled: token.cancelled };
+    emit({ status: token.cancelled ? 'kontext-cancelled' : 'kontext-error', error: msg });
+  } finally {
+    try { token.sock && token.sock.close(); } catch {}
+    activeJobs.delete(jobId);
+  }
+  return { jobId, ...result };
+}
+
+// Run batch Kontext edits over a folder. Emits per-image progress.
+async function runKontextBatch(opts, sender) {
+  const jobId = crypto.randomUUID();
+  const clientId = 'anima-kontext-batch-' + crypto.randomBytes(6).toString('hex');
+  const base = normalizeBase(opts.server);
+  const token = { cancelled: false, sock: null, base };
+  activeJobs.set(jobId, token);
+
+  const emit = (p) => { try { sender && sender.send('comfy:progress', { jobId, ...p }); } catch {} };
+
+  const files = listImageFilesInDir(opts.inputDir, !!opts.recursive);
+  const outDir = opts.outputDir || path.join(opts.inputDir, 'edited');
+
+  // Filter: skip already-processed if requested
+  let pending = files;
+  if (opts.skipDone) {
+    pending = files.filter((f) => {
+      const rel = path.relative(opts.inputDir, f);
+      const out = path.join(outDir, rel);
+      return !fs.existsSync(out);
+    });
+  }
+
+  emit({ status: 'kontext-batch-start', jobId, total: pending.length, skipped: files.length - pending.length, outDir });
+
+  if (!pending.length) {
+    emit({ status: 'kontext-batch-done', completed: 0, errors: 0, total: 0 });
+    activeJobs.delete(jobId);
+    return { jobId, ok: true, completed: 0 };
+  }
+
+  const sock = new ComfySocket(base, clientId);
+  token.sock = sock;
+  try {
+    await sock.ensureOpen();
+  } catch (e) {
+    emit({ status: 'kontext-batch-error', error: 'WebSocket 连接失败: ' + (e.message || e) });
+    activeJobs.delete(jobId);
+    return { jobId, ok: false };
+  }
+
+  let completed = 0, errors = 0;
+  for (let i = 0; i < pending.length; i++) {
+    if (token.cancelled) break;
+    const file = pending[i];
+    const rel = path.relative(opts.inputDir, file);
+    const outPath = path.join(outDir, rel);
+
+    emit({ status: 'kontext-batch-item-start', index: i, total: pending.length, filename: rel });
+
+    try {
+      const uploaded = await comfyUploadImage(base, file);
+      const cfg = { ...opts.cfg, inputImage: uploaded };
+      const workflow = buildKontextWorkflow(cfg);
+      const promptResp = await submitPrompt(base, workflow, clientId);
+      const images = await waitForPrompt(sock, base, promptResp.prompt_id, (p) => {
+        emit({ status: 'cell-step', step: p.step, total: p.total });
+      }, token);
+      const first = images[0];
+      const buf = await fetchImage(base, first.filename, first.subfolder, first.type);
+      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      fs.writeFileSync(outPath, buf);
+      completed++;
+      // Send a small preview for the UI (cap size by downscaling? for now, full dataUrl)
+      const dataUrl = 'data:image/png;base64,' + buf.toString('base64');
+      emit({ status: 'kontext-batch-item-done', index: i, total: pending.length, filename: rel, savedPath: outPath, dataUrl, completed, errors });
+    } catch (e) {
+      if (token.cancelled) break;
+      errors++;
+      emit({ status: 'kontext-batch-item-error', index: i, total: pending.length, filename: rel, error: String(e.message || e), completed, errors });
+    }
+  }
+
+  sock.close();
+  emit({ status: token.cancelled ? 'kontext-batch-cancelled' : 'kontext-batch-done', completed, errors, total: pending.length });
+  activeJobs.delete(jobId);
+  return { jobId, ok: true, completed, errors, cancelled: token.cancelled };
+}
+
 // ---------- save helpers ----------
 async function saveGridImage({ dataUrl, suggestedName }) {
   const r = await dialog.showSaveDialog({
@@ -466,6 +674,10 @@ ipcMain.handle('comfy:ping', (_e, url) => comfyPing(url));
 ipcMain.handle('comfy:objectInfo', (_e, url) => comfyObjectInfo(url));
 ipcMain.handle('comfy:runGrid', (e, opts) => runGrid(opts, e.sender));
 ipcMain.handle('comfy:cancel', (_e, jobId) => cancelJob(jobId));
+ipcMain.handle('comfy:kontextSingle', (e, opts) => runKontextSingle(opts, e.sender));
+ipcMain.handle('comfy:kontextBatch', (e, opts) => runKontextBatch(opts, e.sender));
+ipcMain.handle('dialog:pickImage', () => pickEditImage());
+ipcMain.handle('dialog:pickEditDir', () => pickEditDir());
 ipcMain.handle('grid:save', (_e, opts) => saveGridImage(opts));
 ipcMain.handle('cell:save', (_e, opts) => saveCellImage(opts));
 ipcMain.handle('dialog:pickFolder', () => pickFolder());

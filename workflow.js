@@ -178,4 +178,107 @@ function toFloat(v, d) {
   return Number.isFinite(n) ? n : d;
 }
 
-module.exports = { buildWorkflow, applyAxisOverride };
+// ---------------------------------------------------------------------------
+// Flux.1 Kontext (Dev) workflow — prompt-driven image editing.
+//
+// cfg shape:
+//   {
+//     unet: 'flux1-kontext-dev.safetensors',
+//     weightDtype: 'fp8_e4m3fn_fast',
+//     clipL: 'clip_l.safetensors',
+//     clipT5: 't5xxl_fp8_e4m3fn.safetensors',
+//     clipType: 'flux',            // DualCLIPLoader type
+//     vae: 'ae.safetensors',
+//     prompt: 'remove all watermarks ...',
+//     inputImage: 'uploaded_filename.png',  // ComfyUI input/ filename
+//     seed, steps, cfg, sampler, scheduler, denoise,
+//     fluxGuidance,                 // FluxGuidance widget (cfg 2-3 typical)
+//     savePrefix: 'kontext_out'
+//   }
+function buildKontextWorkflow(cfg) {
+  if (!cfg.unet) throw new Error('未选 Flux UNET 模型');
+  if (!cfg.clipL || !cfg.clipT5) throw new Error('未选 clip_l 和 t5xxl');
+  if (!cfg.vae) throw new Error('未选 VAE');
+  if (!cfg.inputImage) throw new Error('未上传输入图片');
+
+  const w = {};
+  const UNET = '1', CLIP = '2', VAE = '3';
+  const LOAD_IMG = '10', SCALE = '11', VAE_ENC = '12';
+  const POS_ENC = '20', REF_LATENT = '21', GUIDANCE = '22', NEG = '23';
+  const KSAMPLER = '30', DECODE = '40', SAVE = '50';
+
+  w[UNET] = {
+    inputs: { unet_name: cfg.unet, weight_dtype: cfg.weightDtype || 'fp8_e4m3fn_fast' },
+    class_type: 'UNETLoader',
+  };
+  w[CLIP] = {
+    inputs: {
+      clip_name1: cfg.clipL,
+      clip_name2: cfg.clipT5,
+      type: cfg.clipType || 'flux',
+    },
+    class_type: 'DualCLIPLoader',
+  };
+  w[VAE] = { inputs: { vae_name: cfg.vae }, class_type: 'VAELoader' };
+
+  w[LOAD_IMG] = {
+    inputs: { image: cfg.inputImage, upload: 'image' },
+    class_type: 'LoadImage',
+  };
+  w[SCALE] = {
+    inputs: { image: [LOAD_IMG, 0] },
+    class_type: 'FluxKontextImageScale',
+  };
+  w[VAE_ENC] = {
+    inputs: { pixels: [SCALE, 0], vae: [VAE, 0] },
+    class_type: 'VAEEncode',
+  };
+
+  w[POS_ENC] = {
+    inputs: { text: cfg.prompt || '', clip: [CLIP, 0] },
+    class_type: 'CLIPTextEncode',
+  };
+  w[REF_LATENT] = {
+    inputs: { conditioning: [POS_ENC, 0], latent: [VAE_ENC, 0] },
+    class_type: 'ReferenceLatent',
+  };
+  w[GUIDANCE] = {
+    inputs: { conditioning: [REF_LATENT, 0], guidance: toFloat(cfg.fluxGuidance, 2.5) },
+    class_type: 'FluxGuidance',
+  };
+  w[NEG] = {
+    inputs: { conditioning: [POS_ENC, 0] },
+    class_type: 'ConditioningZeroOut',
+  };
+
+  w[KSAMPLER] = {
+    inputs: {
+      seed: toInt(cfg.seed, 0),
+      steps: toInt(cfg.steps, 20),
+      cfg: toFloat(cfg.cfg, 1.0),
+      sampler_name: cfg.sampler || 'euler',
+      scheduler: cfg.scheduler || 'simple',
+      denoise: toFloat(cfg.denoise, 1.0),
+      model: [UNET, 0],
+      positive: [GUIDANCE, 0],
+      negative: [NEG, 0],
+      latent_image: [VAE_ENC, 0],
+    },
+    class_type: 'KSampler',
+  };
+
+  w[DECODE] = {
+    inputs: { samples: [KSAMPLER, 0], vae: [VAE, 0] },
+    class_type: 'VAEDecode',
+  };
+  w[SAVE] = {
+    inputs: {
+      filename_prefix: cfg.savePrefix || 'kontext_edit',
+      images: [DECODE, 0],
+    },
+    class_type: 'SaveImage',
+  };
+  return w;
+}
+
+module.exports = { buildWorkflow, applyAxisOverride, buildKontextWorkflow };

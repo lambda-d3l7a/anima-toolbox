@@ -1069,6 +1069,122 @@ label {
 .ds-check input { margin: 0; }
 #dsAutoTagInfo { font-size: 11px; min-height: 14px; }
 
+/* ---------- Flux Kontext editor ---------- */
+.kx-modeswitch {
+  display: flex;
+  gap: 4px;
+  padding: 8px 14px 0;
+  border-bottom: 1px solid var(--line);
+}
+.kx-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+  gap: 12px;
+  overflow-y: auto;
+  background: var(--bg);
+}
+.kx-input-row { display: flex; gap: 12px; align-items: stretch; }
+.kx-drop {
+  flex: 1;
+  border: 2px dashed var(--line);
+  border-radius: 8px;
+  padding: 18px;
+  text-align: center;
+  background: var(--bg2);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.kx-drop:hover { border-color: var(--accent); background: var(--bg3); }
+.kx-drop.dragover { border-color: var(--accent2); background: rgba(76,139,245,0.1); }
+.kx-drop-hint { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+
+.kx-compare {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  min-height: 0;
+}
+.kx-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px;
+  min-height: 280px;
+}
+.kx-pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.kx-img-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+.kx-img-wrap img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.kx-img-wrap .kx-placeholder {
+  color: var(--muted);
+  font-size: 12px;
+}
+.kx-img-wrap.busy::after {
+  content: '编辑中…';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.6);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.kx-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+/* Preset chips */
+.kx-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.kx-preset {
+  padding: 3px 8px;
+  font-size: 11px;
+  background: var(--bg3);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+  color: var(--text);
+}
+.kx-preset:hover { background: var(--accent); border-color: var(--accent); }
+
 /* ---------- Batch tag mode ---------- */
 .tm-batch {
   flex: 1;
