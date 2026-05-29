@@ -1070,12 +1070,6 @@ label {
 #dsAutoTagInfo { font-size: 11px; min-height: 14px; }
 
 /* ---------- Flux Kontext editor ---------- */
-.kx-modeswitch {
-  display: flex;
-  gap: 4px;
-  padding: 8px 14px 0;
-  border-bottom: 1px solid var(--line);
-}
 .kx-body {
   flex: 1;
   display: flex;
@@ -1085,20 +1079,93 @@ label {
   overflow-y: auto;
   background: var(--bg);
 }
-.kx-input-row { display: flex; gap: 12px; align-items: stretch; }
+.kx-section {
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.kx-section-head {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+.kx-input-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .kx-drop {
-  flex: 1;
   border: 2px dashed var(--line);
   border-radius: 8px;
-  padding: 18px;
+  padding: 16px;
   text-align: center;
-  background: var(--bg2);
+  background: var(--bg3);
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
 }
-.kx-drop:hover { border-color: var(--accent); background: var(--bg3); }
+.kx-drop:hover { border-color: var(--accent); background: var(--bg4); }
 .kx-drop.dragover { border-color: var(--accent2); background: rgba(76,139,245,0.1); }
-.kx-drop-hint { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.kx-drop-hint { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+.kx-drop-buttons { display: flex; gap: 8px; justify-content: center; }
+
+.kx-filelist {
+  margin-top: 8px;
+  max-height: 140px;
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px;
+  display: none;
+}
+.kx-filelist.has-items { display: block; }
+.kx-filelist-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  font-size: 11px;
+  font-family: Consolas, monospace;
+  color: var(--text);
+  border-radius: 3px;
+}
+.kx-filelist-item:hover { background: var(--bg3); }
+.kx-filelist-item .kx-filelist-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kx-filelist-item .kx-filelist-status {
+  flex: none;
+  font-size: 10px;
+  color: var(--muted);
+}
+.kx-filelist-item .kx-filelist-status.done { color: var(--ok); }
+.kx-filelist-item .kx-filelist-status.err { color: var(--err); }
+.kx-filelist-item .kx-filelist-x {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 1;
+}
+.kx-filelist-item .kx-filelist-x:hover { color: var(--err); }
+
+.kx-output-modes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.kx-action-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+.kx-action-row button { padding: 7px 18px; font-size: 13px; }
 
 .kx-compare {
   flex: 1;

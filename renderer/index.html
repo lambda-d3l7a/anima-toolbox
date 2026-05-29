@@ -24,8 +24,6 @@
       <span id="dsHeaderInfo" class="muted"></span>
     </div>
     <div id="toolbarEdit" class="tb-group hidden">
-      <button id="kxRunBtn" class="primary" disabled>🪄 开始编辑</button>
-      <button id="kxCancelBtn" class="ghost hidden">取消</button>
       <span id="kxHeaderInfo" class="muted"></span>
     </div>
   </header>
@@ -465,81 +463,89 @@
       </aside>
 
       <section class="canvas-wrap">
-        <div class="kx-modeswitch">
-          <button id="kxModeSingle" class="tm-mode active" data-mode="single">🖼 单图</button>
-          <button id="kxModeBatch" class="tm-mode" data-mode="batch">📦 批量</button>
-        </div>
+        <div class="kx-body">
 
-        <!-- Single mode -->
-        <div id="kxSingleBody" class="kx-body">
-          <div class="kx-input-row">
+          <!-- Unified input section: drag-drop files, pick files, or pick folder -->
+          <div class="kx-section">
+            <div class="kx-section-head">输入</div>
             <div id="kxDropZone" class="kx-drop">
-              <div class="kx-drop-hint">拖拽图片到这里，或</div>
-              <button id="kxPickImage" class="small">📁 选择图片</button>
-              <div id="kxInputPath" class="muted" style="font-size:11px;margin-top:6px;"></div>
+              <div class="kx-drop-hint">拖拽图片或文件夹到这里</div>
+              <div class="kx-drop-buttons">
+                <button id="kxPickImages" class="small">📁 选图片（可多选）</button>
+                <button id="kxPickFolder" class="small">📂 选文件夹</button>
+              </div>
+            </div>
+            <div class="kx-input-row bt-opts" style="margin-top:8px;">
+              <label class="bt-check"><input id="kxRecursive" type="checkbox" /> 文件夹递归子目录</label>
+              <label class="bt-check"><input id="kxSkipDone" type="checkbox" checked /> 跳过已处理过的</label>
+            </div>
+            <div id="kxFileList" class="kx-filelist"></div>
+            <div id="kxInputSummary" class="muted" style="font-size:11px;margin-top:4px;">未选择文件</div>
+          </div>
+
+          <!-- Output mode -->
+          <div class="kx-section">
+            <div class="kx-section-head">输出</div>
+            <div class="kx-output-modes">
+              <label class="bt-check">
+                <input type="radio" name="kxOutMode" value="replace" />
+                替换原文件（在原位置覆盖）
+              </label>
+              <label class="bt-check">
+                <input type="radio" name="kxOutMode" value="sibling" checked />
+                以原名保存到其他目录
+              </label>
+            </div>
+            <div id="kxOutDirRow" class="bt-row" style="margin-top:6px;">
+              <input id="kxOutDir" type="text" placeholder="点 📁 选输出目录" />
+              <button id="kxPickOutDir" class="small">📁 选择</button>
             </div>
           </div>
-          <div class="kx-compare">
-            <div class="kx-pane">
-              <div class="kx-pane-head">原图</div>
-              <div id="kxBefore" class="kx-img-wrap"></div>
-            </div>
-            <div class="kx-pane">
-              <div class="kx-pane-head">编辑后 <button id="kxSaveSingle" class="small ghost hidden">💾 保存</button></div>
-              <div id="kxAfter" class="kx-img-wrap"></div>
-            </div>
+
+          <!-- Action buttons -->
+          <div class="kx-action-row">
+            <button id="kxRunBtnInline" class="primary" disabled>🪄 开始编辑</button>
+            <button id="kxCancelBtnInline" class="ghost hidden">✕ 取消</button>
+            <span id="kxRunInfo" class="muted" style="font-size:11px;"></span>
           </div>
-          <div id="kxSingleProgress" class="kx-progress hidden">
-            <div class="bt-track"><div id="kxSingleBar" class="bt-bar"></div></div>
-            <div class="bt-progress-text" id="kxSingleStatus">准备…</div>
-          </div>
-        </div>
 
-        <!-- Batch mode -->
-        <div id="kxBatchBody" class="kx-body hidden">
-          <div class="bt-card">
-            <h3 class="bt-title">📦 批量编辑目录里的所有图片</h3>
+          <!-- Result area: shows compare for 1-file, log+progress for multi -->
+          <div class="kx-section">
+            <div class="kx-section-head">结果</div>
 
-            <label>输入目录</label>
-            <div class="bt-row">
-              <input id="kxBatchDir" type="text" readonly placeholder="点 📁 选目录" />
-              <button id="kxBatchPickDir" class="small">📁 选择</button>
-            </div>
-
-            <label>输出目录 <span class="muted">(留空 = 输入目录/edited/)</span></label>
-            <div class="bt-row">
-              <input id="kxBatchOutDir" type="text" placeholder="留空使用默认" />
-              <button id="kxBatchPickOutDir" class="small">📁 选择</button>
-            </div>
-
-            <div class="bt-row bt-opts">
-              <label class="bt-check"><input id="kxBatchRecursive" type="checkbox" /> 包含子目录</label>
-              <label class="bt-check"><input id="kxBatchSkipDone" type="checkbox" checked /> 跳过已处理</label>
-            </div>
-
-            <div class="bt-summary">
-              <span id="kxBatchCount" class="muted">未扫描</span>
-              <span id="kxBatchState" class="muted">就绪</span>
-            </div>
-
-            <div class="bt-progress">
-              <div class="bt-track"><div id="kxBatchBar" class="bt-bar"></div></div>
+            <!-- Progress bar (always shown after Run) -->
+            <div id="kxProgressWrap" class="kx-progress hidden">
+              <div class="bt-track"><div id="kxBar" class="bt-bar"></div></div>
               <div class="bt-progress-text">
-                <span id="kxBatchProgText">0 / 0</span>
+                <span id="kxProgText">0 / 0</span>
                 <span class="bp-sep">·</span>
-                <span id="kxBatchElapsed">用时 00:00</span>
+                <span id="kxElapsed">用时 00:00</span>
                 <span class="bp-sep">·</span>
-                <span id="kxBatchEta">ETA --:--</span>
+                <span id="kxEta">ETA --:--</span>
+                <span class="bp-sep">·</span>
+                <span id="kxStateText">就绪</span>
               </div>
             </div>
 
-            <div class="bt-row bt-actions">
-              <button id="kxBatchScan" class="small ghost">🔍 扫描</button>
+            <!-- Compare panes (shown when only 1 file is being processed) -->
+            <div id="kxCompareWrap" class="kx-compare hidden">
+              <div class="kx-pane">
+                <div class="kx-pane-head">原图</div>
+                <div id="kxBefore" class="kx-img-wrap"></div>
+              </div>
+              <div class="kx-pane">
+                <div class="kx-pane-head">编辑后</div>
+                <div id="kxAfter" class="kx-img-wrap"></div>
+              </div>
             </div>
 
-            <div class="bt-log-head">日志 <button id="kxBatchClearLog" class="small ghost">清空</button></div>
-            <div id="kxBatchLog" class="bt-log"></div>
+            <!-- Log (always shown after Run) -->
+            <div id="kxLogWrap" class="hidden">
+              <div class="bt-log-head">日志 <button id="kxClearLog" class="small ghost">清空</button></div>
+              <div id="kxLog" class="bt-log"></div>
+            </div>
           </div>
+
         </div>
       </section>
     </main>

@@ -15,8 +15,9 @@ contextBridge.exposeInMainWorld('api', {
   saveCell: (opts) => ipcRenderer.invoke('cell:save', opts),
   pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
   pickLoraFiles: (opts) => ipcRenderer.invoke('dialog:pickLoraFiles', opts),
-  pickImage: () => ipcRenderer.invoke('dialog:pickImage'),
+  pickImage: (opts) => ipcRenderer.invoke('dialog:pickImage', opts),
   pickEditDir: () => ipcRenderer.invoke('dialog:pickEditDir'),
+  kontextListImagesInDir: (opts) => ipcRenderer.invoke('kontext:listImagesInDir', opts),
 
   // Resolve File → absolute path (drag-drop helper).
   // Electron 32+ removed File.path; use webUtils.getPathForFile() instead.

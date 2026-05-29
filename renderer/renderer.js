@@ -2725,23 +2725,22 @@ document.addEventListener('keydown', (e) => {
 // ============================================================
 // Flux Kontext editor module
 // ============================================================
+// Unified flow: user collects N image paths (drag, pick files, or pick folder),
+// chooses output mode (replace original / save with same name to other dir),
+// then runs. For N=1 we also show before/after compare. For N>1 we just show
+// progress + log.
 const kx = {
-  mode: 'single',          // 'single' | 'batch'
-  inputPath: null,
-  inputDataUrl: null,
-  outputDataUrl: null,
+  files: [],               // [{ path, name, status: 'pending'|'doing'|'done'|'err', error? }]
+  outputMode: 'sibling',   // 'sibling' | 'replace'
+  outputDir: '',
   jobId: null,
+  running: false,
+  cancelled: false,
   initialised: false,
-  // batch
-  batchDir: null,
-  batchOutDir: null,
-  batchFiles: [],
-  batchRunning: false,
-  batchCancelled: false,
-  batchStartTime: 0,
-  batchProcessed: 0,
-  batchTimes: [],
-  batchEtaTimer: null,
+  startTime: 0,
+  processed: 0,
+  times: [],
+  etaTimer: null,
 };
 
 const KX_PRESETS = [
@@ -2826,11 +2825,10 @@ function kxSaveSettings() {
       sampler: $('kxSampler').value,
       scheduler: $('kxScheduler').value,
       seed: $('kxSeed').value,
-      mode: kx.mode,
-      batchDir: kx.batchDir,
-      batchOutDir: kx.batchOutDir,
-      batchRecursive: $('kxBatchRecursive').checked,
-      batchSkipDone: $('kxBatchSkipDone').checked,
+      outputMode: kx.outputMode,
+      outputDir: kx.outputDir,
+      recursive: $('kxRecursive').checked,
+      skipDone: $('kxSkipDone').checked,
     });
   } catch {}
 }
@@ -2844,11 +2842,13 @@ async function kxRestoreSettings() {
     if (s.fluxGuidance) $('kxGuidance').value = s.fluxGuidance;
     if (s.denoise) $('kxDenoise').value = s.denoise;
     if (s.seed != null) $('kxSeed').value = s.seed;
-    if (s.batchDir) { kx.batchDir = s.batchDir; $('kxBatchDir').value = s.batchDir; }
-    if (s.batchOutDir) { kx.batchOutDir = s.batchOutDir; $('kxBatchOutDir').value = s.batchOutDir; }
-    if (s.batchRecursive) $('kxBatchRecursive').checked = true;
-    if (s.batchSkipDone === false) $('kxBatchSkipDone').checked = false;
-    // Only override dropdown values if list contained the saved entry
+    if (s.outputDir) { kx.outputDir = s.outputDir; $('kxOutDir').value = s.outputDir; }
+    if (s.recursive) $('kxRecursive').checked = true;
+    if (s.skipDone === false) $('kxSkipDone').checked = false;
+    if (s.outputMode === 'replace' || s.outputMode === 'sibling') {
+      kx.outputMode = s.outputMode;
+      document.querySelectorAll('input[name="kxOutMode"]').forEach((r) => { r.checked = r.value === s.outputMode; });
+    }
     const trySet = (id, v) => { if (v && $(id).querySelector(`option[value="${CSS.escape(v)}"]`)) $(id).value = v; };
     trySet('kxUnet', s.unet);
     trySet('kxWeightDtype', s.weightDtype);
@@ -2858,164 +2858,144 @@ async function kxRestoreSettings() {
     trySet('kxVae', s.vae);
     trySet('kxSampler', s.sampler);
     trySet('kxScheduler', s.scheduler);
-    if (s.mode === 'batch') kxSwitchMode('batch');
+    kxRefreshOutputUi();
   } catch (e) { console.warn('[kx] restore failed', e); }
 }
 
-// Mode switch
-function kxSwitchMode(mode) {
-  kx.mode = mode;
-  document.querySelectorAll('#viewEdit .tm-mode').forEach((b) => {
-    b.classList.toggle('active', b.dataset.mode === mode);
-  });
-  $('kxSingleBody').classList.toggle('hidden', mode !== 'single');
-  $('kxBatchBody').classList.toggle('hidden', mode !== 'batch');
-  kxRefreshRunBtn();
-  kxSaveSettings();
-}
-
-function kxRefreshRunBtn() {
-  const btn = $('kxRunBtn');
-  if (kx.mode === 'single') {
-    btn.disabled = !kx.inputPath || !$('kxUnet').value;
-    btn.textContent = '🪄 编辑图片';
-  } else {
-    btn.disabled = !kx.batchDir || !kx.batchFiles.length || !$('kxUnet').value || kx.batchRunning;
-    btn.textContent = '🪄 开始批量编辑';
+// ---------- File list management ----------
+function kxAddFiles(paths) {
+  if (!paths || !paths.length) return;
+  const seen = new Set(kx.files.map((f) => f.path));
+  let added = 0;
+  for (const p of paths) {
+    if (!p || seen.has(p)) continue;
+    seen.add(p);
+    kx.files.push({ path: p, name: p.split(/[\\/]/).pop(), status: 'pending' });
+    added++;
   }
+  if (added) kxRenderFileList();
 }
-
-// ---------- Single mode ----------
-async function kxSetInputPath(p) {
-  if (!p) return;
-  kx.inputPath = p;
-  $('kxInputPath').textContent = p;
-  // Try to display preview via dataset:thumb (reuses existing image loader)
+function kxRemoveFile(idx) {
+  kx.files.splice(idx, 1);
+  kxRenderFileList();
+}
+function kxClearFiles() {
+  kx.files = [];
+  kxRenderFileList();
+  // Also clear before/after panes
+  $('kxBefore').innerHTML = '';
+  $('kxAfter').innerHTML = '';
+  $('kxCompareWrap').classList.add('hidden');
+}
+function kxRenderFileList() {
+  const wrap = $('kxFileList');
+  wrap.innerHTML = '';
+  if (kx.files.length) wrap.classList.add('has-items');
+  else wrap.classList.remove('has-items');
+  for (let i = 0; i < kx.files.length; i++) {
+    const f = kx.files[i];
+    const row = el('div', { class: 'kx-filelist-item' }, [
+      el('span', { class: 'kx-filelist-path', title: f.path }, f.path),
+      el('span', { class: 'kx-filelist-status ' + (f.status === 'done' ? 'done' : f.status === 'err' ? 'err' : '') },
+        f.status === 'done' ? '✓' : f.status === 'err' ? '✗' : f.status === 'doing' ? '…' : ''),
+      el('button', { class: 'kx-filelist-x', title: '移除', onClick: () => kxRemoveFile(i) }, '×'),
+    ]);
+    wrap.appendChild(row);
+  }
+  // Update summary
+  const n = kx.files.length;
+  if (n === 0) $('kxInputSummary').textContent = '未选择文件';
+  else if (n === 1) $('kxInputSummary').textContent = `1 张图片 · 将显示前后对比`;
+  else $('kxInputSummary').textContent = `${n} 张图片 · 批量处理`;
+  kxRefreshRunBtn();
+  // Show before pane preview when exactly 1 file
+  if (n === 1) kxLoadBeforePreview(kx.files[0].path);
+}
+async function kxLoadBeforePreview(p) {
+  $('kxCompareWrap').classList.remove('hidden');
+  $('kxAfter').innerHTML = '<div class="kx-placeholder">点「开始编辑」后显示</div>';
   try {
     const r = await api.taggerImageDataUrl(p);
     if (r && r.ok && r.dataUrl) {
-      kx.inputDataUrl = r.dataUrl;
-      const beforeWrap = $('kxBefore');
-      beforeWrap.innerHTML = '';
+      $('kxBefore').innerHTML = '';
       const img = document.createElement('img');
       img.src = r.dataUrl;
-      beforeWrap.appendChild(img);
+      $('kxBefore').appendChild(img);
     }
-  } catch (e) {
-    console.warn('[kx] preview failed', e);
-  }
-  // Reset after pane
-  $('kxAfter').innerHTML = '<div class="kx-placeholder">点「编辑图片」开始</div>';
-  $('kxSaveSingle').classList.add('hidden');
-  kx.outputDataUrl = null;
+  } catch (e) { console.warn('[kx] preview failed', e); }
+}
+
+function kxRefreshOutputUi() {
+  const isReplace = kx.outputMode === 'replace';
+  $('kxOutDirRow').style.opacity = isReplace ? '0.4' : '1';
+  $('kxOutDirRow').style.pointerEvents = isReplace ? 'none' : '';
+  kxRefreshRunBtn();
+}
+function kxRefreshRunBtn() {
+  const btn = $('kxRunBtnInline');
+  const hasFiles = kx.files.length > 0;
+  const hasModel = !!$('kxUnet').value;
+  const needsOutDir = kx.outputMode === 'sibling' && !kx.outputDir;
+  btn.disabled = !hasFiles || !hasModel || kx.running || needsOutDir;
+  let info;
+  if (kx.running) info = `运行中 · ${kx.processed}/${kx.files.length}`;
+  else if (!hasFiles) info = '请先添加图片';
+  else if (!hasModel) info = '请先连接 ComfyUI 并选 Flux 模型';
+  else if (needsOutDir) info = '请选择输出目录';
+  else info = `就绪 · ${kx.files.length} 张图片 → ${kx.outputMode === 'replace' ? '替换原文件' : '保存到 ' + (kx.outputDir.split(/[\\/]/).pop() || '...')}`;
+  $('kxRunInfo').textContent = info;
+  const hi = $('kxHeaderInfo');
+  if (hi) hi.textContent = info;
+}
+
+// ---------- Input pickers ----------
+async function kxPickImages() {
+  const r = await api.pickImage({ multi: true });
+  if (Array.isArray(r) && r.length) kxAddFiles(r);
+  else if (typeof r === 'string') kxAddFiles([r]);
+}
+async function kxPickFolder() {
+  const dir = await api.pickEditDir();
+  if (!dir) return;
+  const recursive = $('kxRecursive').checked;
+  const r = await api.kontextListImagesInDir({ dir, recursive });
+  if (!r.ok) { alert('扫描目录失败: ' + r.error); return; }
+  if (!r.files.length) { alert('目录里没有支持的图片格式 (png/jpg/jpeg/webp/bmp)'); return; }
+  kxAddFiles(r.files);
+}
+async function kxPickOutDir() {
+  const d = await api.pickEditDir();
+  if (!d) return;
+  kx.outputDir = d;
+  $('kxOutDir').value = d;
+  kxSaveSettings();
   kxRefreshRunBtn();
 }
 
-async function kxRunSingle() {
-  if (!kx.inputPath) { alert('请先选择图片'); return; }
-  if (!$('kxUnet').value) { alert('请选 Flux UNET 模型'); return; }
-  const cfg = kxCfgFromUi();
-  kxSaveSettings();
-
-  const afterWrap = $('kxAfter');
-  afterWrap.innerHTML = '<div class="kx-placeholder">上传并提交工作流…</div>';
-  afterWrap.classList.add('busy');
-  $('kxSingleProgress').classList.remove('hidden');
-  $('kxSingleBar').style.width = '0%';
-  $('kxSingleStatus').textContent = '准备…';
-  $('kxRunBtn').disabled = true;
-  $('kxCancelBtn').classList.remove('hidden');
-  $('kxSaveSingle').classList.add('hidden');
-
-  const url = $('server').value.trim() || 'http://127.0.0.1:8188';
-  const r = await api.comfyKontextSingle({ server: url, inputPath: kx.inputPath, cfg });
-  kx.jobId = r.jobId;
+// ---------- Run / cancel ----------
+function kxFmtTime(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '--:--';
+  seconds = Math.round(seconds);
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
 }
-
-function kxOnSingleProgress(msg) {
-  if (msg.status === 'kontext-start') {
-    kx.jobId = msg.jobId;
-    return;
+function kxUpdateClock(processed, total) {
+  const elapsed = (Date.now() - kx.startTime) / 1000;
+  $('kxElapsed').textContent = '用时 ' + kxFmtTime(elapsed);
+  let etaSec = null;
+  if (processed > 0 && processed < total) {
+    const avg = kx.times.length ? kx.times.reduce((a, b) => a + b, 0) / kx.times.length : elapsed / processed;
+    etaSec = avg * (total - processed);
+  } else if (processed >= total) {
+    etaSec = 0;
   }
-  if (msg.status === 'kontext-step') {
-    const phase = msg.phase === 'uploading' ? '上传中' : msg.phase === 'queued' ? '已提交，等待生成' : msg.phase;
-    $('kxSingleStatus').textContent = phase;
-    return;
-  }
-  if (msg.status === 'cell-step') {
-    const pct = msg.total ? (msg.step / msg.total) * 100 : 0;
-    $('kxSingleBar').style.width = pct.toFixed(1) + '%';
-    $('kxSingleStatus').textContent = `采样 ${msg.step}/${msg.total}`;
-    return;
-  }
-  if (msg.status === 'kontext-done') {
-    kx.outputDataUrl = msg.dataUrl;
-    const afterWrap = $('kxAfter');
-    afterWrap.classList.remove('busy');
-    afterWrap.innerHTML = '';
-    const img = document.createElement('img');
-    img.src = msg.dataUrl;
-    afterWrap.appendChild(img);
-    $('kxSaveSingle').classList.remove('hidden');
-    $('kxSingleBar').style.width = '100%';
-    $('kxSingleStatus').textContent = '完成 ✓';
-    $('kxRunBtn').disabled = false;
-    $('kxCancelBtn').classList.add('hidden');
-    kx.jobId = null;
-    return;
-  }
-  if (msg.status === 'kontext-error' || msg.status === 'kontext-cancelled') {
-    const afterWrap = $('kxAfter');
-    afterWrap.classList.remove('busy');
-    afterWrap.innerHTML = '<div class="kx-placeholder" style="color:#ef4444;font-size:11px;padding:8px;white-space:pre-wrap;">' +
-      (msg.status === 'kontext-cancelled' ? '已取消' : '错误:\n' + (msg.error || '')) + '</div>';
-    $('kxSingleStatus').textContent = msg.status === 'kontext-cancelled' ? '已取消' : '错误';
-    $('kxRunBtn').disabled = false;
-    $('kxCancelBtn').classList.add('hidden');
-    kx.jobId = null;
-    return;
-  }
+  $('kxEta').textContent = 'ETA ' + (etaSec != null ? kxFmtTime(etaSec) : '--:--');
 }
-
-async function kxSaveSingleImage() {
-  if (!kx.outputDataUrl) return;
-  const inputBase = (kx.inputPath || 'edited.png').split(/[\\/]/).pop().replace(/\.[^.]+$/, '');
-  await api.saveCell({ dataUrl: kx.outputDataUrl, suggestedName: inputBase + '_edited.png' });
-}
-
-// ---------- Batch mode ----------
-async function kxBatchPickInput() {
-  const d = await api.pickEditDir();
-  if (!d) return;
-  kx.batchDir = d;
-  $('kxBatchDir').value = d;
-  kxSaveSettings();
-  await kxBatchScan();
-}
-
-async function kxBatchPickOutput() {
-  const d = await api.pickEditDir();
-  if (!d) return;
-  kx.batchOutDir = d;
-  $('kxBatchOutDir').value = d;
-  kxSaveSettings();
-}
-
-async function kxBatchScan() {
-  if (!kx.batchDir) return;
-  $('kxBatchCount').textContent = '扫描中…';
-  // Reuse dataset:list for cross-platform recursive walk
-  const recursive = $('kxBatchRecursive').checked;
-  const r = await api.datasetList({ dir: kx.batchDir, recursive });
-  if (!r.ok) { $('kxBatchCount').textContent = '扫描失败: ' + r.error; return; }
-  kx.batchFiles = r.images.map((x) => x.path);
-  $('kxBatchCount').textContent = `共 ${kx.batchFiles.length} 张图片`;
-  $('kxBatchProgText').textContent = `0 / ${kx.batchFiles.length}`;
-  kxRefreshRunBtn();
-}
-
-function kxBatchLog(text, cls) {
-  const wrap = $('kxBatchLog');
+function kxLog(text, cls) {
+  const wrap = $('kxLog');
   const t = new Date();
   const ts = [t.getHours(), t.getMinutes(), t.getSeconds()].map((n) => String(n).padStart(2, '0')).join(':');
   const line = el('div', { class: 'bt-log-line' + (cls ? ' ' + cls : '') }, [
@@ -3026,182 +3006,207 @@ function kxBatchLog(text, cls) {
   while (wrap.childElementCount > 500) wrap.removeChild(wrap.firstChild);
 }
 
-function kxBatchFmtTime(seconds) {
-  if (!Number.isFinite(seconds) || seconds < 0) return '--:--';
-  seconds = Math.round(seconds);
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  const pad = (n) => String(n).padStart(2, '0');
-  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
-}
-
-function kxBatchUpdateClock(processed, total) {
-  const elapsed = (Date.now() - kx.batchStartTime) / 1000;
-  $('kxBatchElapsed').textContent = '用时 ' + kxBatchFmtTime(elapsed);
-  let etaSec = null;
-  if (processed > 0 && processed < total) {
-    const avg = kx.batchTimes.length
-      ? kx.batchTimes.reduce((a, b) => a + b, 0) / kx.batchTimes.length
-      : elapsed / processed;
-    etaSec = avg * (total - processed);
-  } else if (processed >= total) {
-    etaSec = 0;
-  }
-  $('kxBatchEta').textContent = 'ETA ' + (etaSec != null ? kxBatchFmtTime(etaSec) : '--:--');
-}
-
-async function kxRunBatch() {
-  if (!kx.batchDir || !kx.batchFiles.length) { alert('请先选目录并扫描'); return; }
+async function kxRun() {
+  if (kx.running) return;
+  if (!kx.files.length) { alert('请先添加图片'); return; }
   if (!$('kxUnet').value) { alert('请选 Flux UNET 模型'); return; }
-  if (kx.batchRunning) return;
+  if (kx.outputMode === 'sibling' && !kx.outputDir) { alert('请选输出目录'); return; }
 
-  kx.batchRunning = true;
-  kx.batchCancelled = false;
-  kx.batchStartTime = Date.now();
-  kx.batchProcessed = 0;
-  kx.batchTimes = [];
-  $('kxRunBtn').disabled = true;
-  $('kxCancelBtn').classList.remove('hidden');
-  $('kxBatchState').textContent = '运行中…';
-  $('kxBatchBar').style.width = '0%';
-  if (kx.batchEtaTimer) clearInterval(kx.batchEtaTimer);
-  kx.batchEtaTimer = setInterval(() => kxBatchUpdateClock(kx.batchProcessed, kx.batchFiles.length), 500);
+  // For replace mode, ask confirmation since files are overwritten
+  if (kx.outputMode === 'replace') {
+    if (!confirm(`将覆盖 ${kx.files.length} 个原文件，无法恢复。继续？`)) return;
+  }
 
-  kxBatchLog(`开始批量编辑：${kx.batchFiles.length} 张图片，prompt = "${$('kxPrompt').value.slice(0, 60)}…"`, 'ok');
+  // Optionally skip-done for sibling mode
+  const skipDone = $('kxSkipDone').checked && kx.outputMode === 'sibling';
 
+  // Reset statuses
+  for (const f of kx.files) { f.status = 'pending'; f.error = null; }
+  kxRenderFileList();
+
+  // Build payload
   const cfg = kxCfgFromUi();
+  kxSaveSettings();
   const url = $('server').value.trim() || 'http://127.0.0.1:8188';
+
+  kx.running = true;
+  kx.cancelled = false;
+  kx.startTime = Date.now();
+  kx.processed = 0;
+  kx.times = [];
+  $('kxRunBtnInline').disabled = true;
+  $('kxCancelBtnInline').classList.remove('hidden');
+  $('kxProgressWrap').classList.remove('hidden');
+  $('kxLogWrap').classList.remove('hidden');
+  $('kxBar').style.width = '0%';
+  $('kxStateText').textContent = '运行中…';
+  if (kx.etaTimer) clearInterval(kx.etaTimer);
+  kx.etaTimer = setInterval(() => kxUpdateClock(kx.processed, kx.files.length), 500);
+
+  kxLog(`开始：${kx.files.length} 张图片，模式 = ${kx.outputMode === 'replace' ? '替换原文件' : '保存到 ' + kx.outputDir}`, 'ok');
+
+  // Compare panes shown only for single file
+  if (kx.files.length === 1) {
+    $('kxCompareWrap').classList.remove('hidden');
+    $('kxAfter').innerHTML = '<div class="kx-placeholder">上传中…</div>';
+    $('kxAfter').classList.add('busy');
+  } else {
+    $('kxCompareWrap').classList.add('hidden');
+  }
+
   const r = await api.comfyKontextBatch({
     server: url,
-    inputDir: kx.batchDir,
-    outputDir: kx.batchOutDir || null,
-    recursive: $('kxBatchRecursive').checked,
-    skipDone: $('kxBatchSkipDone').checked,
+    files: kx.files.map((f) => f.path),
+    outputMode: kx.outputMode,
+    outputDir: kx.outputMode === 'sibling' ? kx.outputDir : null,
+    skipDone,
+    sendPreview: kx.files.length === 1,
     cfg,
   });
   kx.jobId = r.jobId;
 }
 
-function kxOnBatchProgress(msg) {
+function kxOnProgress(msg) {
   if (msg.status === 'kontext-batch-start') {
     kx.jobId = msg.jobId;
-    kxBatchLog(`目标 ${msg.total} 张，跳过 ${msg.skipped}，输出 → ${msg.outDir}`, 'ok');
+    kxLog(`队列 ${msg.total} 张，跳过 ${msg.skipped}`, 'ok');
+    $('kxProgText').textContent = `0 / ${msg.total}`;
     return;
   }
   if (msg.status === 'kontext-batch-item-start') {
-    $('kxBatchState').textContent = `处理 ${msg.index + 1}/${msg.total}: ${msg.filename}`;
+    $('kxStateText').textContent = `处理 ${msg.index + 1}/${msg.total}: ${msg.filename}`;
+    // Mark file as doing
+    const idx = kx.files.findIndex((f) => f.path === msg.inputPath);
+    if (idx >= 0) { kx.files[idx].status = 'doing'; kxRenderFileList(); }
     return;
   }
   if (msg.status === 'cell-step') {
-    // Show inner sampler step inside batch progress text (compact)
-    const cur = kx.batchProcessed + 1;
-    const total = kx.batchFiles.length;
-    $('kxBatchProgText').textContent = `${cur} / ${total} · 采样 ${msg.step}/${msg.total}`;
+    const cur = kx.processed + 1;
+    const total = kx.files.length;
+    $('kxProgText').textContent = `${cur} / ${total} · 采样 ${msg.step}/${msg.total}`;
     return;
   }
   if (msg.status === 'kontext-batch-item-done') {
-    kx.batchProcessed = msg.completed;
-    kx.batchTimes.push(((Date.now() - kx.batchStartTime) / 1000) / Math.max(1, msg.completed));
-    if (kx.batchTimes.length > 50) kx.batchTimes.shift();
+    kx.processed = msg.completed;
+    kx.times.push(((Date.now() - kx.startTime) / 1000) / Math.max(1, msg.completed));
+    if (kx.times.length > 50) kx.times.shift();
     const pct = (msg.completed / msg.total) * 100;
-    $('kxBatchBar').style.width = pct.toFixed(1) + '%';
-    $('kxBatchProgText').textContent = `${msg.completed} / ${msg.total} (${pct.toFixed(0)}%)`;
-    kxBatchLog(`✓ ${msg.filename} → ${msg.savedPath.split(/[\\/]/).pop()}`, 'ok');
-    kxBatchUpdateClock(msg.completed, msg.total);
+    $('kxBar').style.width = pct.toFixed(1) + '%';
+    $('kxProgText').textContent = `${msg.completed} / ${msg.total} (${pct.toFixed(0)}%)`;
+    const savedShort = (msg.savedPath || '').split(/[\\/]/).pop();
+    kxLog(`✓ ${msg.filename} → ${savedShort}`, 'ok');
+    kxUpdateClock(msg.completed, msg.total);
+    // Mark file as done
+    const idx = kx.files.findIndex((f) => f.path === msg.inputPath);
+    if (idx >= 0) { kx.files[idx].status = 'done'; kxRenderFileList(); }
+    // Show the after image if it was a single-file run
+    if (msg.dataUrl) {
+      $('kxAfter').classList.remove('busy');
+      $('kxAfter').innerHTML = '';
+      const img = document.createElement('img');
+      img.src = msg.dataUrl;
+      $('kxAfter').appendChild(img);
+    }
     return;
   }
   if (msg.status === 'kontext-batch-item-error') {
-    kx.batchProcessed = (msg.completed || 0) + (msg.errors || 0);
-    kxBatchLog(`✗ ${msg.filename}: ${msg.error}`, 'err');
+    kxLog(`✗ ${msg.filename}: ${msg.error}`, 'err');
+    const idx = kx.files.findIndex((f) => f.path === msg.inputPath);
+    if (idx >= 0) { kx.files[idx].status = 'err'; kx.files[idx].error = msg.error; kxRenderFileList(); }
+    if (kx.files.length === 1) {
+      $('kxAfter').classList.remove('busy');
+      $('kxAfter').innerHTML = '<div class="kx-placeholder" style="color:#ef4444;font-size:11px;padding:8px;white-space:pre-wrap;">错误:\n' + (msg.error || '') + '</div>';
+    }
     return;
   }
   if (msg.status === 'kontext-batch-done' || msg.status === 'kontext-batch-cancelled') {
-    if (kx.batchEtaTimer) { clearInterval(kx.batchEtaTimer); kx.batchEtaTimer = null; }
-    kx.batchRunning = false;
+    if (kx.etaTimer) { clearInterval(kx.etaTimer); kx.etaTimer = null; }
+    kx.running = false;
     kx.jobId = null;
-    $('kxRunBtn').disabled = false;
-    $('kxCancelBtn').classList.add('hidden');
+    $('kxRunBtnInline').disabled = false;
+    $('kxCancelBtnInline').classList.add('hidden');
+    $('kxAfter').classList.remove('busy');
     const final = msg.status === 'kontext-batch-cancelled'
       ? `已取消 · ✓${msg.completed} ✗${msg.errors}`
       : `完成 · ✓${msg.completed} ✗${msg.errors}`;
-    $('kxBatchState').textContent = final;
-    kxBatchLog(final, msg.status === 'kontext-batch-cancelled' ? 'skip' : 'ok');
+    $('kxStateText').textContent = final;
+    kxLog(final, msg.status === 'kontext-batch-cancelled' ? 'skip' : 'ok');
+    kxRefreshRunBtn();
     return;
   }
   if (msg.status === 'kontext-batch-error') {
-    kx.batchRunning = false;
-    $('kxRunBtn').disabled = false;
-    $('kxCancelBtn').classList.add('hidden');
-    $('kxBatchState').textContent = '错误';
-    kxBatchLog('错误: ' + msg.error, 'err');
+    if (kx.etaTimer) { clearInterval(kx.etaTimer); kx.etaTimer = null; }
+    kx.running = false;
+    $('kxRunBtnInline').disabled = false;
+    $('kxCancelBtnInline').classList.add('hidden');
+    $('kxStateText').textContent = '错误';
+    kxLog('错误: ' + msg.error, 'err');
+    kxRefreshRunBtn();
     return;
   }
 }
 
 // ---------- Wire it up ----------
 api.onComfyProgress((msg) => {
-  // Single-image messages
-  if (msg.status && msg.status.startsWith('kontext-') && !msg.status.startsWith('kontext-batch')) {
-    kxOnSingleProgress(msg);
-  }
-  // Batch messages
-  if (msg.status && msg.status.startsWith('kontext-batch')) {
-    kxOnBatchProgress(msg);
-  }
-  // cell-step is shared — route based on which kx mode is active
-  if (msg.status === 'cell-step' && state.view === 'edit') {
-    if (kx.mode === 'single') kxOnSingleProgress(msg);
-    else kxOnBatchProgress(msg);
+  if (state.view !== 'edit') return;
+  if (msg.status && (msg.status.startsWith('kontext-batch') || msg.status === 'cell-step')) {
+    kxOnProgress(msg);
   }
 });
 
-// Drag & drop for single mode
+// Drop zone: accepts dropped files (single or multi)
 const kxDropZone = $('kxDropZone');
 kxDropZone.addEventListener('dragover', (e) => { e.preventDefault(); kxDropZone.classList.add('dragover'); });
 kxDropZone.addEventListener('dragleave', () => kxDropZone.classList.remove('dragover'));
-kxDropZone.addEventListener('drop', (e) => {
+kxDropZone.addEventListener('drop', async (e) => {
   e.preventDefault();
   kxDropZone.classList.remove('dragover');
+  const paths = [];
   if (e.dataTransfer.files && e.dataTransfer.files.length) {
-    const f = e.dataTransfer.files[0];
-    const p = api.getPathForFile(f);
-    if (p) kxSetInputPath(p);
+    for (const f of e.dataTransfer.files) {
+      const p = api.getPathForFile(f);
+      if (p) paths.push(p);
+    }
   }
-});
-kxDropZone.addEventListener('click', async () => {
-  const p = await api.pickImage();
-  if (p) kxSetInputPath(p);
-});
-$('kxPickImage').addEventListener('click', async (e) => {
-  e.stopPropagation();
-  const p = await api.pickImage();
-  if (p) kxSetInputPath(p);
+  // If a folder was dropped, the file object's path is the dir; treat single
+  // dropped entry as a folder if it has no recognizable image extension.
+  if (paths.length === 1) {
+    const p = paths[0];
+    const isImg = /\.(png|jpe?g|webp|bmp)$/i.test(p);
+    if (!isImg) {
+      // Try as folder
+      const recursive = $('kxRecursive').checked;
+      const r = await api.kontextListImagesInDir({ dir: p, recursive });
+      if (r.ok && r.files.length) { kxAddFiles(r.files); return; }
+    }
+  }
+  kxAddFiles(paths);
 });
 
-// Mode buttons
-document.querySelectorAll('#viewEdit .tm-mode').forEach((b) => {
-  b.addEventListener('click', () => kxSwitchMode(b.dataset.mode));
-});
-
-// Run / cancel
-$('kxRunBtn').addEventListener('click', () => {
-  if (kx.mode === 'single') kxRunSingle();
-  else kxRunBatch();
-});
-$('kxCancelBtn').addEventListener('click', async () => {
+// Buttons
+$('kxPickImages').addEventListener('click', (e) => { e.stopPropagation(); kxPickImages(); });
+$('kxPickFolder').addEventListener('click', (e) => { e.stopPropagation(); kxPickFolder(); });
+$('kxPickOutDir').addEventListener('click', kxPickOutDir);
+$('kxRunBtnInline').addEventListener('click', kxRun);
+$('kxCancelBtnInline').addEventListener('click', async () => {
   if (kx.jobId) await api.comfyCancel(kx.jobId);
-  if (kx.batchRunning) kx.batchCancelled = true;
+  kx.cancelled = true;
 });
-$('kxSaveSingle').addEventListener('click', kxSaveSingleImage);
+$('kxClearLog').addEventListener('click', () => { $('kxLog').innerHTML = ''; });
 
-// Batch buttons
-$('kxBatchPickDir').addEventListener('click', kxBatchPickInput);
-$('kxBatchPickOutDir').addEventListener('click', kxBatchPickOutput);
-$('kxBatchScan').addEventListener('click', kxBatchScan);
-$('kxBatchRecursive').addEventListener('change', () => { kxSaveSettings(); if (kx.batchDir) kxBatchScan(); });
-$('kxBatchSkipDone').addEventListener('change', kxSaveSettings);
-$('kxBatchClearLog').addEventListener('click', () => { $('kxBatchLog').innerHTML = ''; });
+// Output mode radio
+document.querySelectorAll('input[name="kxOutMode"]').forEach((r) => {
+  r.addEventListener('change', (e) => {
+    if (e.target.checked) {
+      kx.outputMode = e.target.value;
+      kxSaveSettings();
+      kxRefreshOutputUi();
+    }
+  });
+});
+
+$('kxRecursive').addEventListener('change', kxSaveSettings);
+$('kxSkipDone').addEventListener('change', kxSaveSettings);
 
 // Save on field change
 ['kxPrompt', 'kxSteps', 'kxCfg', 'kxGuidance', 'kxDenoise', 'kxSampler', 'kxScheduler', 'kxSeed',

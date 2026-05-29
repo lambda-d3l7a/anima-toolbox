@@ -420,14 +420,14 @@ async function comfyUploadImage(base, filePath) {
   return j.name || filename;
 }
 
-async function pickEditImage() {
+async function pickEditImage(opts) {
   const r = await dialog.showOpenDialog({
     title: '选择要编辑的图片',
-    properties: ['openFile'],
+    properties: opts && opts.multi ? ['openFile', 'multiSelections'] : ['openFile'],
     filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] }],
   });
   if (r.canceled || !r.filePaths.length) return null;
-  return r.filePaths[0];
+  return opts && opts.multi ? r.filePaths : r.filePaths[0];
 }
 
 async function pickEditDir() {
@@ -525,7 +525,12 @@ async function runKontextSingle(opts, sender) {
   return { jobId, ...result };
 }
 
-// Run batch Kontext edits over a folder. Emits per-image progress.
+// Run Kontext edits over an arbitrary file list.
+// opts.files: string[] — absolute input paths
+// opts.outputMode: 'replace' | 'sibling' — write back to same path / write to outputDir/<basename>
+// opts.outputDir: string — required when outputMode === 'sibling'
+// opts.skipDone: boolean — for sibling mode, skip if output already exists
+// opts.sendPreview: boolean — if exactly 1 file, also emit the dataUrl for before/after compare
 async function runKontextBatch(opts, sender) {
   const jobId = crypto.randomUUID();
   const clientId = 'anima-kontext-batch-' + crypto.randomBytes(6).toString('hex');
@@ -535,20 +540,31 @@ async function runKontextBatch(opts, sender) {
 
   const emit = (p) => { try { sender && sender.send('comfy:progress', { jobId, ...p }); } catch {} };
 
-  const files = listImageFilesInDir(opts.inputDir, !!opts.recursive);
-  const outDir = opts.outputDir || path.join(opts.inputDir, 'edited');
+  const mode = opts.outputMode === 'replace' ? 'replace' : 'sibling';
+  const files = Array.isArray(opts.files) ? opts.files.filter(Boolean) : [];
 
-  // Filter: skip already-processed if requested
-  let pending = files;
-  if (opts.skipDone) {
-    pending = files.filter((f) => {
-      const rel = path.relative(opts.inputDir, f);
-      const out = path.join(outDir, rel);
-      return !fs.existsSync(out);
-    });
+  // Compute output paths up-front
+  const targets = files.map((f) => {
+    const name = path.basename(f);
+    const out = mode === 'replace' ? f : path.join(opts.outputDir || '', name);
+    return { input: f, output: out, name };
+  });
+
+  // Filter: skip already-processed (sibling mode only; replace mode has no notion of "done")
+  let pending = targets;
+  if (opts.skipDone && mode === 'sibling') {
+    pending = targets.filter((t) => !fs.existsSync(t.output));
   }
+  const skipped = targets.length - pending.length;
 
-  emit({ status: 'kontext-batch-start', jobId, total: pending.length, skipped: files.length - pending.length, outDir });
+  emit({
+    status: 'kontext-batch-start',
+    jobId,
+    total: pending.length,
+    skipped,
+    outDir: mode === 'replace' ? '(replace in place)' : opts.outputDir,
+    mode,
+  });
 
   if (!pending.length) {
     emit({ status: 'kontext-batch-done', completed: 0, errors: 0, total: 0 });
@@ -566,17 +582,17 @@ async function runKontextBatch(opts, sender) {
     return { jobId, ok: false };
   }
 
+  const sendPreview = !!opts.sendPreview && pending.length === 1;
+
   let completed = 0, errors = 0;
   for (let i = 0; i < pending.length; i++) {
     if (token.cancelled) break;
-    const file = pending[i];
-    const rel = path.relative(opts.inputDir, file);
-    const outPath = path.join(outDir, rel);
+    const t = pending[i];
 
-    emit({ status: 'kontext-batch-item-start', index: i, total: pending.length, filename: rel });
+    emit({ status: 'kontext-batch-item-start', index: i, total: pending.length, filename: t.name, inputPath: t.input });
 
     try {
-      const uploaded = await comfyUploadImage(base, file);
+      const uploaded = await comfyUploadImage(base, t.input);
       const cfg = { ...opts.cfg, inputImage: uploaded };
       const workflow = buildKontextWorkflow(cfg);
       const promptResp = await submitPrompt(base, workflow, clientId);
@@ -585,16 +601,23 @@ async function runKontextBatch(opts, sender) {
       }, token);
       const first = images[0];
       const buf = await fetchImage(base, first.filename, first.subfolder, first.type);
-      fs.mkdirSync(path.dirname(outPath), { recursive: true });
-      fs.writeFileSync(outPath, buf);
+      fs.mkdirSync(path.dirname(t.output), { recursive: true });
+      fs.writeFileSync(t.output, buf);
       completed++;
-      // Send a small preview for the UI (cap size by downscaling? for now, full dataUrl)
-      const dataUrl = 'data:image/png;base64,' + buf.toString('base64');
-      emit({ status: 'kontext-batch-item-done', index: i, total: pending.length, filename: rel, savedPath: outPath, dataUrl, completed, errors });
+      const payload = {
+        status: 'kontext-batch-item-done',
+        index: i, total: pending.length, filename: t.name,
+        inputPath: t.input, savedPath: t.output,
+        completed, errors,
+      };
+      if (sendPreview) {
+        payload.dataUrl = 'data:image/png;base64,' + buf.toString('base64');
+      }
+      emit(payload);
     } catch (e) {
       if (token.cancelled) break;
       errors++;
-      emit({ status: 'kontext-batch-item-error', index: i, total: pending.length, filename: rel, error: String(e.message || e), completed, errors });
+      emit({ status: 'kontext-batch-item-error', index: i, total: pending.length, filename: t.name, inputPath: t.input, error: String(e.message || e), completed, errors });
     }
   }
 
@@ -676,8 +699,12 @@ ipcMain.handle('comfy:runGrid', (e, opts) => runGrid(opts, e.sender));
 ipcMain.handle('comfy:cancel', (_e, jobId) => cancelJob(jobId));
 ipcMain.handle('comfy:kontextSingle', (e, opts) => runKontextSingle(opts, e.sender));
 ipcMain.handle('comfy:kontextBatch', (e, opts) => runKontextBatch(opts, e.sender));
-ipcMain.handle('dialog:pickImage', () => pickEditImage());
+ipcMain.handle('dialog:pickImage', (e, opts) => pickEditImage(opts || {}));
 ipcMain.handle('dialog:pickEditDir', () => pickEditDir());
+ipcMain.handle('kontext:listImagesInDir', (_e, { dir, recursive }) => {
+  try { return { ok: true, files: listImageFilesInDir(dir, !!recursive) }; }
+  catch (e) { return { ok: false, error: String(e.message || e) }; }
+});
 ipcMain.handle('grid:save', (_e, opts) => saveGridImage(opts));
 ipcMain.handle('cell:save', (_e, opts) => saveCellImage(opts));
 ipcMain.handle('dialog:pickFolder', () => pickFolder());
