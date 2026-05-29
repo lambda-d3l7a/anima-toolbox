@@ -143,6 +143,7 @@ label {
 .view.hidden { display: none !important; }
 #viewXy { flex-direction: row; }
 #viewTag { flex-direction: column; }
+#viewEdit { flex-direction: row; }
 
 /* Backward-compat: a few rules still reference .main */
 .main {
@@ -1096,17 +1097,39 @@ label {
 .kx-input-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .kx-drop {
   border: 2px dashed var(--line);
-  border-radius: 8px;
-  padding: 16px;
+  border-radius: 10px;
+  padding: 32px 16px;
   text-align: center;
   background: var(--bg3);
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
 }
 .kx-drop:hover { border-color: var(--accent); background: var(--bg4); }
 .kx-drop.dragover { border-color: var(--accent2); background: rgba(76,139,245,0.1); }
-.kx-drop-hint { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
-.kx-drop-buttons { display: flex; gap: 8px; justify-content: center; }
+.kx-drop-hint { color: var(--muted); font-size: 13px; }
+.kx-drop-buttons { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+.kx-big-btn {
+  padding: 16px 28px;
+  font-size: 15px;
+  font-weight: 600;
+  border-radius: 10px;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #fff;
+  min-width: 160px;
+  transition: background 0.15s, transform 0.1s;
+}
+.kx-big-btn:hover:not(:disabled) { background: var(--accent2); transform: translateY(-1px); }
+.kx-big-btn:nth-child(2) {
+  background: var(--bg4);
+  border-color: var(--line);
+  color: var(--text);
+}
+.kx-big-btn:nth-child(2):hover:not(:disabled) { background: var(--bg2); border-color: var(--accent); }
 
 .kx-filelist {
   margin-top: 8px;

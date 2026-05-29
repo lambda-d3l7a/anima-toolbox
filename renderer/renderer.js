@@ -395,6 +395,8 @@ async function doConnect() {
     renderAxisExtra('x');
     renderAxisExtra('y');
     $('generateBtn').disabled = false;
+    // Fill the Flux Kontext editor dropdowns too (if that view was already inited)
+    try { kxPopulateSelects(); } catch {}
 
     const parts = [
       `${info.unets.length} UNET`,
@@ -1930,6 +1932,8 @@ function switchView(view) {
   }
   if (view === 'edit') {
     kxInit();
+    // Re-fill dropdowns each time in case objectInfo loaded after first init
+    kxPopulateSelects();
   }
   try { api.storeSet('ui', { view, tmMode: state.tmMode }); } catch {}
 }
@@ -2764,14 +2768,17 @@ function kxInit() {
 function kxPopulateSelects() {
   if (!state.objectInfo) return;
   const info = state.objectInfo;
-  fillSelect($('kxUnet'), info.unets, '', { preferred: ['flux1-kontext-dev', 'kontext'] });
-  fillSelect($('kxWeightDtype'), info.weightDtypes || ['default', 'fp8_e4m3fn', 'fp8_e4m3fn_fast', 'fp8_e5m2'], 'fp8_e4m3fn_fast');
-  fillSelect($('kxClipType'), info.dualClipTypes && info.dualClipTypes.length ? info.dualClipTypes : ['flux', 'sdxl', 'sd3'], 'flux');
-  fillSelect($('kxClipL'), info.dualClipNames && info.dualClipNames.length ? info.dualClipNames : info.textEncoders, '', { preferred: ['clip_l'] });
-  fillSelect($('kxClipT5'), info.dualClipNames && info.dualClipNames.length ? info.dualClipNames : info.textEncoders, '', { preferred: ['t5xxl', 't5'] });
-  fillSelect($('kxVae'), info.vaes, '', { preferred: ['ae.safetensors', 'flux_vae'] });
-  fillSelect($('kxSampler'), info.samplers, 'euler');
-  fillSelect($('kxScheduler'), info.schedulers, 'simple');
+  // Preserve any value the user already picked (pass it as `current`).
+  const cur = (id) => { const e = $(id); return e ? e.value : ''; };
+  fillSelect($('kxUnet'), info.unets, cur('kxUnet'), { preferred: ['flux1-kontext-dev', 'kontext'] });
+  fillSelect($('kxWeightDtype'), info.weightDtypes || ['default', 'fp8_e4m3fn', 'fp8_e4m3fn_fast', 'fp8_e5m2'], cur('kxWeightDtype') || 'fp8_e4m3fn_fast');
+  fillSelect($('kxClipType'), info.dualClipTypes && info.dualClipTypes.length ? info.dualClipTypes : ['flux', 'sdxl', 'sd3'], cur('kxClipType') || 'flux');
+  fillSelect($('kxClipL'), info.dualClipNames && info.dualClipNames.length ? info.dualClipNames : info.textEncoders, cur('kxClipL'), { preferred: ['clip_l'] });
+  fillSelect($('kxClipT5'), info.dualClipNames && info.dualClipNames.length ? info.dualClipNames : info.textEncoders, cur('kxClipT5'), { preferred: ['t5xxl', 't5'] });
+  fillSelect($('kxVae'), info.vaes, cur('kxVae'), { preferred: ['ae.safetensors', 'flux_vae'] });
+  fillSelect($('kxSampler'), info.samplers, cur('kxSampler') || 'euler');
+  fillSelect($('kxScheduler'), info.schedulers, cur('kxScheduler') || 'simple');
+  kxRefreshRunBtn();
 }
 
 function kxRenderPresets() {

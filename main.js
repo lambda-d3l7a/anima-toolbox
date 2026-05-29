@@ -259,7 +259,14 @@ async function waitForPrompt(sock, base, promptId, onCellProgress, token) {
       }
       if (msg.type === 'execution_error' && msg.data && msg.data.prompt_id === promptId) {
         done = true; off();
-        reject(new Error('execution_error: ' + (msg.data.exception_message || msg.data.exception_type || 'unknown')));
+        const d = msg.data;
+        const nodeInfo = d.node_type ? ` [节点 ${d.node_id} ${d.node_type}]` : '';
+        console.error('[execution_error]', JSON.stringify({
+          node_id: d.node_id, node_type: d.node_type,
+          exception_message: d.exception_message,
+          traceback: Array.isArray(d.traceback) ? d.traceback.slice(-6) : d.traceback,
+        }, null, 2));
+        reject(new Error('execution_error' + nodeInfo + ': ' + (d.exception_message || d.exception_type || 'unknown')));
       }
     });
   });

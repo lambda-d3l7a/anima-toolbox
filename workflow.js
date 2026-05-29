@@ -216,6 +216,7 @@ function buildKontextWorkflow(cfg) {
       clip_name1: cfg.clipL,
       clip_name2: cfg.clipT5,
       type: cfg.clipType || 'flux',
+      device: 'default',
     },
     class_type: 'DualCLIPLoader',
   };
