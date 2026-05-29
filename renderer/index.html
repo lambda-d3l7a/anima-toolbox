@@ -23,6 +23,11 @@
     <div id="toolbarTag" class="tb-group hidden">
       <span id="dsHeaderInfo" class="muted"></span>
     </div>
+    <div id="toolbarEdit" class="tb-group hidden">
+      <button id="kxRunBtn" class="primary" disabled>🪄 开始编辑</button>
+      <button id="kxCancelBtn" class="ghost hidden">取消</button>
+      <span id="kxHeaderInfo" class="muted"></span>
+    </div>
   </header>
 
   <div class="layout">
@@ -36,6 +41,10 @@
         <span class="nav-icon">🏷</span>
         <span class="nav-label">标签</span>
       </button>
+      <button id="navEdit" class="nav-btn" data-view="edit" title="图片编辑 (Flux Kontext)">
+        <span class="nav-icon">🪄</span>
+        <span class="nav-label">编辑</span>
+      </button>
     </nav>
 
     <!-- VIEW: XY plot -->
@@ -43,7 +52,7 @@
     <aside class="panel">
       <section class="block">
         <h3>模型 <span class="muted">(Anima = Cosmos 三件套)</span></h3>
-        <label>扩散模型 <span class="muted">(models/diffusion_models)</span></label>
+        <label>扩散模型 <span class="muted">(models/unet)</span></label>
         <select id="unet"></select>
         <div class="grid2">
           <div>
@@ -187,7 +196,7 @@
             <p>1. 启动本地 ComfyUI（默认 <code>http://127.0.0.1:8188</code>）</p>
             <p>2. 把 <a href="#" id="animaLink">Anima</a> 三个文件分别放好：</p>
             <p style="margin-left:1em;">
-              • <code>anima-base-v1.0.safetensors</code> → <code>models/diffusion_models/</code><br/>
+              • <code>anima-base-v1.0.safetensors</code> → <code>models/unet/</code><br/>
               • <code>qwen_3_06b_base.safetensors</code> → <code>models/text_encoders/</code><br/>
               • <code>qwen_image_vae.safetensors</code> → <code>models/vae/</code>
             </p>
@@ -407,6 +416,132 @@
           </div>
         </div>
       </div>
+    </main>
+
+    <!-- VIEW: Flux Kontext image editor -->
+    <main id="viewEdit" class="view hidden">
+      <aside class="panel">
+        <section class="block">
+          <h3>Flux Kontext 模型</h3>
+          <label>扩散模型 <span class="muted">(models/unet)</span></label>
+          <select id="kxUnet"></select>
+          <div class="grid2">
+            <div>
+              <label>Weight Dtype</label>
+              <select id="kxWeightDtype"></select>
+            </div>
+            <div>
+              <label>CLIP Type</label>
+              <select id="kxClipType"></select>
+            </div>
+          </div>
+          <label>clip_l (DualCLIP slot 1)</label>
+          <select id="kxClipL"></select>
+          <label>t5xxl (DualCLIP slot 2)</label>
+          <select id="kxClipT5"></select>
+          <label>VAE</label>
+          <select id="kxVae"></select>
+        </section>
+
+        <section class="block">
+          <h3>编辑指令 <span class="muted">(自然语言 prompt)</span></h3>
+          <textarea id="kxPrompt" rows="4" placeholder="remove all watermarks and texts while maintaining the original composition"></textarea>
+          <div id="kxPresets" class="kx-presets"></div>
+        </section>
+
+        <section class="block">
+          <h3>采样设置</h3>
+          <div class="grid2">
+            <div><label>Steps</label><input id="kxSteps" type="number" value="20" /></div>
+            <div><label>CFG</label><input id="kxCfg" type="number" step="0.1" value="1.0" /></div>
+            <div><label>Flux Guidance</label><input id="kxGuidance" type="number" step="0.1" value="2.5" /></div>
+            <div><label>Denoise</label><input id="kxDenoise" type="number" step="0.05" value="1.0" /></div>
+            <div><label>Sampler</label><select id="kxSampler"></select></div>
+            <div><label>Scheduler</label><select id="kxScheduler"></select></div>
+          </div>
+          <label>Seed <span class="muted">(留空 / -1 = 随机)</span></label>
+          <input id="kxSeed" type="text" value="-1" />
+        </section>
+      </aside>
+
+      <section class="canvas-wrap">
+        <div class="kx-modeswitch">
+          <button id="kxModeSingle" class="tm-mode active" data-mode="single">🖼 单图</button>
+          <button id="kxModeBatch" class="tm-mode" data-mode="batch">📦 批量</button>
+        </div>
+
+        <!-- Single mode -->
+        <div id="kxSingleBody" class="kx-body">
+          <div class="kx-input-row">
+            <div id="kxDropZone" class="kx-drop">
+              <div class="kx-drop-hint">拖拽图片到这里，或</div>
+              <button id="kxPickImage" class="small">📁 选择图片</button>
+              <div id="kxInputPath" class="muted" style="font-size:11px;margin-top:6px;"></div>
+            </div>
+          </div>
+          <div class="kx-compare">
+            <div class="kx-pane">
+              <div class="kx-pane-head">原图</div>
+              <div id="kxBefore" class="kx-img-wrap"></div>
+            </div>
+            <div class="kx-pane">
+              <div class="kx-pane-head">编辑后 <button id="kxSaveSingle" class="small ghost hidden">💾 保存</button></div>
+              <div id="kxAfter" class="kx-img-wrap"></div>
+            </div>
+          </div>
+          <div id="kxSingleProgress" class="kx-progress hidden">
+            <div class="bt-track"><div id="kxSingleBar" class="bt-bar"></div></div>
+            <div class="bt-progress-text" id="kxSingleStatus">准备…</div>
+          </div>
+        </div>
+
+        <!-- Batch mode -->
+        <div id="kxBatchBody" class="kx-body hidden">
+          <div class="bt-card">
+            <h3 class="bt-title">📦 批量编辑目录里的所有图片</h3>
+
+            <label>输入目录</label>
+            <div class="bt-row">
+              <input id="kxBatchDir" type="text" readonly placeholder="点 📁 选目录" />
+              <button id="kxBatchPickDir" class="small">📁 选择</button>
+            </div>
+
+            <label>输出目录 <span class="muted">(留空 = 输入目录/edited/)</span></label>
+            <div class="bt-row">
+              <input id="kxBatchOutDir" type="text" placeholder="留空使用默认" />
+              <button id="kxBatchPickOutDir" class="small">📁 选择</button>
+            </div>
+
+            <div class="bt-row bt-opts">
+              <label class="bt-check"><input id="kxBatchRecursive" type="checkbox" /> 包含子目录</label>
+              <label class="bt-check"><input id="kxBatchSkipDone" type="checkbox" checked /> 跳过已处理</label>
+            </div>
+
+            <div class="bt-summary">
+              <span id="kxBatchCount" class="muted">未扫描</span>
+              <span id="kxBatchState" class="muted">就绪</span>
+            </div>
+
+            <div class="bt-progress">
+              <div class="bt-track"><div id="kxBatchBar" class="bt-bar"></div></div>
+              <div class="bt-progress-text">
+                <span id="kxBatchProgText">0 / 0</span>
+                <span class="bp-sep">·</span>
+                <span id="kxBatchElapsed">用时 00:00</span>
+                <span class="bp-sep">·</span>
+                <span id="kxBatchEta">ETA --:--</span>
+              </div>
+            </div>
+
+            <div class="bt-row bt-actions">
+              <button id="kxBatchScan" class="small ghost">🔍 扫描</button>
+            </div>
+
+            <div class="bt-log-head">日志 <button id="kxBatchClearLog" class="small ghost">清空</button></div>
+            <div id="kxBatchLog" class="bt-log"></div>
+          </div>
+        </div>
+      </section>
     </main>
   </div>
 

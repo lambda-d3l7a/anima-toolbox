@@ -2,10 +2,11 @@
 
 围绕 [Anima](https://huggingface.co/circlestone-labs/Anima) 模型（基于 NVIDIA Cosmos-Predict2-2B）和它的 LoRA 生态的桌面端工具集。Electron + 本地 ComfyUI 后端。
 
-两大模块：
+三大模块：
 
 1. **🧮 XY 图生成** — 仿 [sd-webui-advanced-xyz](https://github.com/Haoming02/sd-webui-advanced-xyz) 的轴编辑器，扫 LoRA 权重 / 多 LoRA / Seed / CFG / Steps / Sampler / Scheduler / Sampler+Scheduler 组合
 2. **🏷 打标工具** — 内置 [Camie-Tagger v2](https://huggingface.co/Camais03/camie-tagger-v2)（70k+ danbooru tag、ViT 143M 参数），支持单图 / 数据集编辑 / 整目录批量
+3. **🪄 图片编辑** — 基于 [Flux.1 Kontext (Dev)](https://huggingface.co/Comfy-Org/flux1-kontext-dev_ComfyUI) 的 prompt 驱动编辑，去水印 / 改风格 / 换背景 / 重上色，单图 + 文件夹批量
 
 ![screenshot placeholder](docs/screenshot.png)
 
@@ -21,21 +22,37 @@ cd ComfyUI
 python main.py
 ```
 
-### 2. Anima 三件套
-从 https://huggingface.co/circlestone-labs/Anima 下载，按如下目录摆放：
+### 2. Anima 三件套（XY 图模块）
+从 https://huggingface.co/circlestone-labs/Anima 下载：
 
 ```
 ComfyUI/
 └── models/
-    ├── diffusion_models/anima-base-v1.0.safetensors   (UNETLoader)
-    ├── text_encoders/qwen_3_06b_base.safetensors      (CLIPLoader, type=cosmos)
-    └── vae/qwen_image_vae.safetensors                  (VAELoader)
+    ├── unet/anima-base-v1.0.safetensors            (UNETLoader)
+    ├── text_encoders/qwen_3_06b_base.safetensors    (CLIPLoader, type=cosmos)
+    └── vae/qwen_image_vae.safetensors                (VAELoader)
 ```
 
-### 3. 测试用的 LoRA
+### 3. Flux Kontext 四件套（图片编辑模块，可选）
+从 https://huggingface.co/Comfy-Org/flux1-kontext-dev_ComfyUI 下载：
+
+```
+ComfyUI/
+└── models/
+    ├── unet/flux1-kontext-dev.safetensors            (UNETLoader, 也可放 fp8 量化版)
+    ├── text_encoders/clip_l.safetensors              ┐
+    ├── text_encoders/t5xxl_fp8_e4m3fn.safetensors    ┤ DualCLIPLoader, type=flux
+    └── vae/ae.safetensors                             (VAELoader)
+```
+
+不需要做图片编辑就跳过这一步。
+
+> **注**：Anima 跟 Flux Kontext 都用 ComfyUI 的 `UNETLoader`，都放在 `models/unet/`。两个模型可以并存，工具会根据文件名自动匹配（Anima 选 `anima*`，Kontext 选 `flux1-kontext*`）。
+
+### 4. 测试用的 LoRA（XY 图模块）
 丢到 `ComfyUI/models/loras/`（可放子目录）。**注意**：放进去之后**重启 ComfyUI**，否则 `/object_info` 扫不到新文件。
 
-### 4. Node.js 18+
+### 5. Node.js 18+
 
 ---
 
@@ -144,6 +161,52 @@ npm run dist
 
 ---
 
+## 🪄 图片编辑模块
+
+侧边栏「🪄 编辑」是基于 [Flux.1 Kontext (Dev)](https://huggingface.co/Comfy-Org/flux1-kontext-dev_ComfyUI) 的 prompt 驱动图像编辑器。把图片喂进去，写一句话告诉它怎么改，就能：
+
+- 去水印 / 去文字
+- 重上色（衣服 / 头发 / 背景）
+- 风格迁移（油画 / 素描 / 写实化）
+- 换背景 / 抠主体
+- 角色一致性下的细节修改
+
+### 左侧面板
+
+模型选择：UNET（`flux1-kontext-dev*`）/ Weight Dtype / **DualCLIP** 双 clip 槽 (`clip_l` + `t5xxl`) / VAE (`ae.safetensors`)。默认按文件名自动匹配。
+
+prompt 框下方有 **7 个预设 chip**（去水印 / 改晴天 / 转油画 / 转素描 / 抠主体 / 去背景 / 增清晰），点了直接填入。
+
+### 两个子模式
+
+#### 🖼 单图模式
+- 拖拽图片到 drop zone，或点「📁 选择图片」
+- 左右对比：**原图** vs **编辑后**
+- 编辑后有「💾 保存」按钮另存为 PNG
+
+#### 📦 批量模式
+- 选输入目录 + 输出目录（留空 = `<输入>/edited/`）
+- 包含子目录 / 跳过已处理 复选框
+- 「🔍 扫描」预览图片数
+- 进度条 + 用时 + ETA + 实时日志，跑完输出目录里能找到对应文件名的编辑结果
+
+### Flux Kontext prompt 技巧
+
+| 场景 | 模板 |
+|---|---|
+| 改物体 | `Change [object] to [new state], keep [content] unchanged` |
+| 风格迁移 | `Transform to [style], while maintaining [composition / character] unchanged` |
+| 换背景 | `Change the background to [new bg], keep the subject in the exact same position and pose` |
+| 改文字 | `Replace '[original]' with '[new]', maintain the same font style` |
+
+**核心原则**：具体、明确、显式声明保留什么。Kontext 擅长理解细节指令。
+
+### 默认参数
+
+跟原始工作流一致：Steps=20, CFG=1, Flux Guidance=2.5, sampler=euler, scheduler=simple, denoise=1。这套对绝大多数编辑任务都够用。
+
+---
+
 ## Anima prompt 提示
 
 - 画师标签格式：`@artist_name`（**小写、下划线换空格、`@` 前缀**）
@@ -155,14 +218,14 @@ npm run dist
 
 ```
 anima-toolbox/
-├── main.js              Electron 主进程：ComfyUI 客户端 + 网格调度 + IPC 路由
+├── main.js              Electron 主进程：ComfyUI 客户端 + 网格调度 + Kontext + IPC 路由
 ├── preload.js           contextBridge API
-├── workflow.js          ComfyUI workflow JSON 构造器 + 轴覆盖
+├── workflow.js          ComfyUI workflow JSON 构造器（Anima XY + Flux Kontext）
 ├── tagger.js            ONNX runtime + sharp 预处理
 ├── renderer/
-│   ├── index.html
+│   ├── index.html       三个视图（XY 图 / 标签 / 编辑）
 │   ├── styles.css
-│   └── renderer.js      UI 逻辑（约 2.5k 行）
+│   └── renderer.js      UI 逻辑（约 3k 行）
 ├── 启动.bat              一键启动（自动 npm install）
 └── package.json
 ```
@@ -179,11 +242,12 @@ anima-toolbox/
 
 ## 致谢
 
-- [circlestone-labs/Anima](https://huggingface.co/circlestone-labs/Anima) — 模型作者
-- [NVIDIA Cosmos-Predict2](https://huggingface.co/nvidia/Cosmos-Predict2-2B) — 底层架构
+- [circlestone-labs/Anima](https://huggingface.co/circlestone-labs/Anima) — XY 图模块的模型
+- [NVIDIA Cosmos-Predict2](https://huggingface.co/nvidia/Cosmos-Predict2-2B) — Anima 的底层架构
+- [Black Forest Labs / Flux.1 Kontext](https://huggingface.co/Comfy-Org/flux1-kontext-dev_ComfyUI) — 编辑模块的模型
 - [Camais03/camie-tagger-v2](https://huggingface.co/Camais03/camie-tagger-v2) — 打标模型
 - [comfyanonymous/ComfyUI](https://github.com/comfyanonymous/ComfyUI) — 后端
-- [Haoming02/sd-webui-advanced-xyz](https://github.com/Haoming02/sd-webui-advanced-xyz) — UI 灵感来源
+- [Haoming02/sd-webui-advanced-xyz](https://github.com/Haoming02/sd-webui-advanced-xyz) — XY UI 灵感来源
 
 ---
 
