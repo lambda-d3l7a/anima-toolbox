@@ -1,4 +1,8 @@
-# Anima Toolbox
+<p align="center">
+  <img src="build/icon.png" alt="Anima Toolbox" width="200" />
+</p>
+
+<h1 align="center">Anima Toolbox</h1>
 
 围绕 [Anima](https://huggingface.co/circlestone-labs/Anima) 模型（基于 NVIDIA Cosmos-Predict2-2B）和它的 LoRA 生态的桌面端工具集。Electron + 本地 ComfyUI 后端。
 

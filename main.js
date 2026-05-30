@@ -1060,6 +1060,7 @@ function createWindow() {
     width: 1480,
     height: 920,
     backgroundColor: '#16181c',
+    title: 'Anima Toolbox',
     icon: fs.existsSync(iconPath) ? iconPath : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
