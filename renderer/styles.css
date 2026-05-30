@@ -86,6 +86,13 @@ label {
 }
 .conn-status.ok { color: var(--ok); border-color: var(--ok); }
 .conn-status.err { color: var(--err); border-color: var(--err); }
+.save-hint {
+  font-size: 11px;
+  color: var(--ok);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.save-hint.show { opacity: 1; }
 
 /* Main layout */
 .layout {

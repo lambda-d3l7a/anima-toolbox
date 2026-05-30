@@ -806,33 +806,46 @@ async function startGenerate() {
   }
 
   // Canonicalize every LoRA name (base + axis) against ComfyUI's combo list so
-  // path-separator / case differences don't trip the validator.
-  const baseLorasCanonical = [];
-  const unresolvedNames = [];
-  for (const lo of state.baseLoras.filter((l) => l && l.name)) {
-    const canon = canonicalizeLoraName(lo.name);
-    if (canon) baseLorasCanonical.push({ name: canon, strength: lo.strength });
-    else { baseLorasCanonical.push(lo); unresolvedNames.push(lo.name); }
+  // path-separator / case differences don't trip the validator. Capture the
+  // original (raw) names first so we can re-run after a refresh.
+  const rawBase = state.baseLoras.filter((l) => l && l.name).map((l) => ({ name: l.name, strength: l.strength }));
+  const rawXLora = (xAxis.type === 'lora_weight') ? xAxis.loraName : null;
+  const rawYLora = (yAxis.type === 'lora_weight') ? yAxis.loraName : null;
+  const rawXFiles = (xAxis.type === 'lora_file') ? xAxis.values.slice() : null;
+  const rawYFiles = (yAxis.type === 'lora_file') ? yAxis.values.slice() : null;
+  const usesLora = rawBase.length || rawXLora || rawYLora || rawXFiles || rawYFiles;
+
+  let baseLorasCanonical = [];
+  let unresolvedNames = [];
+  const doCanonicalize = () => {
+    baseLorasCanonical = [];
+    unresolvedNames = [];
+    for (const lo of rawBase) {
+      const canon = canonicalizeLoraName(lo.name);
+      if (canon) baseLorasCanonical.push({ name: canon, strength: lo.strength });
+      else { baseLorasCanonical.push({ name: lo.name, strength: lo.strength }); unresolvedNames.push(lo.name); }
+    }
+    if (rawXLora) { const c = canonicalizeLoraName(rawXLora); if (c) xAxis.loraName = c; else { xAxis.loraName = rawXLora; unresolvedNames.push(rawXLora); } }
+    if (rawYLora) { const c = canonicalizeLoraName(rawYLora); if (c) yAxis.loraName = c; else { yAxis.loraName = rawYLora; unresolvedNames.push(rawYLora); } }
+    if (rawXFiles) xAxis.values = rawXFiles.map((v) => canonicalizeLoraName(String(v)) || (unresolvedNames.push(v), v));
+    if (rawYFiles) yAxis.values = rawYFiles.map((v) => canonicalizeLoraName(String(v)) || (unresolvedNames.push(v), v));
+  };
+
+  doCanonicalize();
+  // If anything is unresolved AND we use LoRAs, the cached object_info is likely
+  // stale (user added LoRAs after connecting). Refresh once and retry.
+  if (usesLora && unresolvedNames.length) {
+    console.log('[startGenerate] unresolved LoRAs, refreshing object_info…', unresolvedNames);
+    await refreshObjectInfo();
+    doCanonicalize();
   }
-  if (xAxis.type === 'lora_weight' && xAxis.loraName) {
-    const c = canonicalizeLoraName(xAxis.loraName);
-    if (c) xAxis.loraName = c; else unresolvedNames.push(xAxis.loraName);
-  }
-  if (yAxis.type === 'lora_weight' && yAxis.loraName) {
-    const c = canonicalizeLoraName(yAxis.loraName);
-    if (c) yAxis.loraName = c; else unresolvedNames.push(yAxis.loraName);
-  }
-  if (xAxis.type === 'lora_file') {
-    xAxis.values = xAxis.values.map((v) => canonicalizeLoraName(String(v)) || (unresolvedNames.push(v), v));
-  }
-  if (yAxis.type === 'lora_file') {
-    yAxis.values = yAxis.values.map((v) => canonicalizeLoraName(String(v)) || (unresolvedNames.push(v), v));
-  }
+
   if (unresolvedNames.length) {
     const uniq = Array.from(new Set(unresolvedNames));
-    const ok = confirm('以下 LoRA 名字未在 ComfyUI 列表里找到精确匹配，可能会失败：\n\n' +
+    const listLen = (state.objectInfo && state.objectInfo.loras && state.objectInfo.loras.length) || 0;
+    const ok = confirm(`以下 LoRA 名字在 ComfyUI 的 ${listLen} 个 LoRA 里找不到精确匹配（已自动刷新过列表），提交大概率会失败：\n\n` +
       uniq.slice(0, 8).join('\n') + (uniq.length > 8 ? `\n…还有 ${uniq.length - 8} 项` : '') +
-      '\n\n仍然继续？');
+      '\n\n建议：用 LoRA 选择栏的「🔎 列表」从下拉里重新选。\n\n仍然继续？');
     if (!ok) {
       $('generateBtn').disabled = false;
       $('cancelBtn').classList.add('hidden');
@@ -2623,6 +2636,33 @@ document.addEventListener('keydown', (e) => {
 
 // ---------- wire up buttons ----------
 $('connectBtn').addEventListener('click', doConnect);
+
+// ---------- global "save settings" ----------
+// Settings already auto-save on change; this button forces an explicit save of
+// every view's config at once and shows confirmation feedback.
+function saveAllSettings() {
+  try { saveSettings(); } catch (e) { console.warn('[saveAll] xy settings failed', e); }
+  try { if (typeof kxSaveSettings === 'function') kxSaveSettings(); } catch (e) { console.warn('[saveAll] kontext settings failed', e); }
+  try { api.storeSet('ui', { view: state.view, tmMode: state.tmMode }); } catch {}
+}
+let saveHintTimer = null;
+function flashSaved() {
+  saveAllSettings();
+  const hint = $('saveSettingsHint');
+  hint.textContent = '✓ 已保存';
+  hint.classList.add('show');
+  if (saveHintTimer) clearTimeout(saveHintTimer);
+  saveHintTimer = setTimeout(() => { hint.classList.remove('show'); hint.textContent = ''; }, 2000);
+}
+$('saveSettingsBtn').addEventListener('click', flashSaved);
+// Ctrl+S anywhere saves settings (not the OS save dialog)
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+    e.preventDefault();
+    flashSaved();
+  }
+});
+
 $('generateBtn').addEventListener('click', startGenerate);
 $('cancelBtn').addEventListener('click', async () => {
   if (!state.currentJobId) {
@@ -2768,16 +2808,31 @@ function kxInit() {
 function kxPopulateSelects() {
   if (!state.objectInfo) return;
   const info = state.objectInfo;
-  // Preserve any value the user already picked (pass it as `current`).
   const cur = (id) => { const e = $(id); return e ? e.value : ''; };
-  fillSelect($('kxUnet'), info.unets, cur('kxUnet'), { preferred: ['flux1-kontext-dev', 'kontext'] });
+  // Pick the best value for a select: keep the current choice if it's still in
+  // the list; otherwise substring-match against `needles` (e.g. 't5' matches
+  // "t5xxl_fp8_e4m3fn.safetensors"). fillSelect's `preferred` only does EXACT
+  // matches, which is why "t5xxl" never matched the real filename and the slot
+  // kept falling back to the first item (clip_l).
+  const pick = (id, items, needles) => {
+    const c = cur(id);
+    if (c && items.includes(c)) return c;
+    for (const n of needles) {
+      const hit = items.find((x) => String(x).toLowerCase().includes(n));
+      if (hit) return hit;
+    }
+    return c;
+  };
+  const clipItems = info.dualClipNames && info.dualClipNames.length ? info.dualClipNames : info.textEncoders;
+  fillSelect($('kxUnet'), info.unets, pick('kxUnet', info.unets, ['flux1-kontext', 'kontext', 'flux']));
   fillSelect($('kxWeightDtype'), info.weightDtypes || ['default', 'fp8_e4m3fn', 'fp8_e4m3fn_fast', 'fp8_e5m2'], cur('kxWeightDtype') || 'fp8_e4m3fn_fast');
   fillSelect($('kxClipType'), info.dualClipTypes && info.dualClipTypes.length ? info.dualClipTypes : ['flux', 'sdxl', 'sd3'], cur('kxClipType') || 'flux');
-  fillSelect($('kxClipL'), info.dualClipNames && info.dualClipNames.length ? info.dualClipNames : info.textEncoders, cur('kxClipL'), { preferred: ['clip_l'] });
-  fillSelect($('kxClipT5'), info.dualClipNames && info.dualClipNames.length ? info.dualClipNames : info.textEncoders, cur('kxClipT5'), { preferred: ['t5xxl', 't5'] });
-  fillSelect($('kxVae'), info.vaes, cur('kxVae'), { preferred: ['ae.safetensors', 'flux_vae'] });
+  fillSelect($('kxClipL'), clipItems, pick('kxClipL', clipItems, ['clip_l', 'clip-l', 'cliptext']));
+  fillSelect($('kxClipT5'), clipItems, pick('kxClipT5', clipItems, ['t5xxl', 't5']));
+  fillSelect($('kxVae'), info.vaes, pick('kxVae', info.vaes, ['ae.safetensors', 'flux_vae', 'ae.']));
   fillSelect($('kxSampler'), info.samplers, cur('kxSampler') || 'euler');
   fillSelect($('kxScheduler'), info.schedulers, cur('kxScheduler') || 'simple');
+  kxSanitizeClipSlots();
   kxRefreshRunBtn();
 }
 
@@ -2859,14 +2914,35 @@ async function kxRestoreSettings() {
     const trySet = (id, v) => { if (v && $(id).querySelector(`option[value="${CSS.escape(v)}"]`)) $(id).value = v; };
     trySet('kxUnet', s.unet);
     trySet('kxWeightDtype', s.weightDtype);
-    trySet('kxClipL', s.clipL);
-    trySet('kxClipT5', s.clipT5);
+    // Only restore clip slots if the saved value is sensible for that slot —
+    // otherwise an old buggy save (e.g. clip_l stuck in the t5 slot) would keep
+    // overwriting the correct pick. A t5 slot must hold a t5 file; a clip_l slot
+    // must NOT hold a t5 file.
+    if (s.clipL && !/t5/i.test(s.clipL)) trySet('kxClipL', s.clipL);
+    if (s.clipT5 && /t5/i.test(s.clipT5)) trySet('kxClipT5', s.clipT5);
     trySet('kxClipType', s.clipType);
     trySet('kxVae', s.vae);
     trySet('kxSampler', s.sampler);
     trySet('kxScheduler', s.scheduler);
+    // After restore, make sure the clip slots hold the right kind of file and
+    // persist the corrected values so the bad save is cleaned up.
+    kxSanitizeClipSlots();
+    kxSaveSettings();
     kxRefreshOutputUi();
   } catch (e) { console.warn('[kx] restore failed', e); }
+}
+
+// Enforce that the t5xxl slot holds a t5 file and the clip_l slot doesn't.
+function kxSanitizeClipSlots() {
+  const info = state.objectInfo;
+  if (!info) return;
+  const items = info.dualClipNames && info.dualClipNames.length ? info.dualClipNames : info.textEncoders;
+  if (!items || !items.length) return;
+  const t5 = items.find((x) => /t5/i.test(x));
+  const clipL = items.find((x) => /clip[-_]?l/i.test(x)) || items.find((x) => !/t5/i.test(x));
+  const t5sel = $('kxClipT5'), lsel = $('kxClipL');
+  if (t5 && t5sel && !/t5/i.test(t5sel.value)) t5sel.value = t5;
+  if (clipL && lsel && /t5/i.test(lsel.value)) lsel.value = clipL;
 }
 
 // ---------- File list management ----------
